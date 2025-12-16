@@ -1,0 +1,322 @@
+# Security configuration for production deployment
+x-common-security: &common-security
+  # Non-root user for security (dynamic UID/GID)
+  user: "${UID:-1001}:${GID:-1001}"
+  # Resource limits to prevent DoS
+  deploy:
+    resources:
+      limits:
+        cpus: '2.0'
+        memory: 4G
+        pids: 100
+      reservations:
+        cpus: '0.5'
+        memory: 1G
+  # Security options
+  security_opt:
+    - no-new-privileges:true
+  # Read-only filesystem where possible
+  read_only: true
+  # Drop all capabilities
+  cap_drop:
+    - ALL
+  # Add only needed capabilities
+  cap_add:
+    - NET_BIND_SERVICE
+
+services:
+  # Development container with security hardening
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    image: fifa-soccer-ds:dev
+    container_name: fifa-soccer-ds-dev
+    volumes:
+      - .:/app  # Writable for development
+      - /app/.venv  # Isolated virtual environment
+      - dev_cache:/tmp  # Temporary directory
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=0
+    working_dir: /app
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    networks:
+      - fifa-network
+    # Apply security with overrides for development
+    <<: *common-security
+    security_opt:
+      - no-new-privileges:true
+    # Override read-only for development (dev-specific)
+    read_only: false
+    # Less restrictive resource limits for development
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  # Production application container with security hardening
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: fifa-soccer-ds:latest
+    container_name: fifa-soccer-ds-app
+    volumes:
+      - ./data:/app/data:ro
+      - ./outputs:/app/outputs
+      - ./configs:/app/configs:ro
+      - app_cache:/tmp  # Temporary directory for runtime
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    working_dir: /app
+    command: python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 2
+    ports:
+      - "8000:8000"
+    networks:
+      - fifa-network
+    restart: unless-stopped
+    # Apply security configuration
+    <<: *common-security
+    # Production-specific security
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # GPU access for production (if needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    # Wait for MLflow to be ready (without health check dependency)
+    depends_on:
+      mlflow:
+        condition: service_started
+
+  # Training container with GPU access and security
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    image: fifa-soccer-ds:train
+    container_name: fifa-soccer-ds-trainer
+    volumes:
+      - ./data:/app/data:ro
+      - ./outputs:/app/outputs
+      - ./mlruns:/app/mlruns
+      - trainer_cache:/tmp  # Training cache directory
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=0
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    working_dir: /app
+    command: python -m src.train.weekly_retrainer
+    networks:
+      - fifa-network
+    restart: "no"
+    profiles:
+      - training
+    # Apply security with GPU overrides
+    <<: *common-security
+    # Training-specific security and resources
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - NET_BIND_SERVICE
+    # Resource limits for training
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+    # Training-specific health check
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python.*weekly_retrainer"]
+      interval: 60s
+      timeout: 30s
+      retries: 2
+      start_period: 120s
+
+  # MLflow tracking server with security hardening
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    image: fifa-soccer-ds:mlflow
+    container_name: fifa-soccer-ds-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/home/soccer/app/mlruns
+      - ./outputs:/home/soccer/app/outputs
+      - mlflow_cache:/tmp  # Temporary directory
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MLFLOW_BACKEND_STORE_URI=file:///home/soccer/app/mlruns
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/home/soccer/app/outputs
+      - MLFLOW_DISABLE_ARTIFACTS_UPLOAD_LIMIT=false
+      - MLFLOW_ARTIFACTS_UPLOAD_CHUNK_SIZE=8192
+    networks:
+      - fifa-network
+    command: >
+      sh -c "
+        mlflow server 
+        --host 0.0.0.0 
+        --port 5000 
+        --backend-store-uri file:///home/soccer/app/mlruns
+        --default-artifact-root /home/soccer/app/outputs
+        --serve-artifacts
+        --workers 2
+        --gunicorn-opts '--timeout 300 --max-requests 1000 --max-requests-jitter 100'
+      "
+    # Apply security configuration
+    <<: *common-security
+    # MLflow-specific security
+    security_opt:
+      - no-new-privileges:true
+    # Override read-only for MLflow data
+    read_only: false
+    # Enhanced health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # Resource limits for MLflow
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # Jupyter notebook for development and analysis with security
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    image: fifa-soccer-ds:jupyter
+    container_name: fifa-soccer-ds-jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./:/home/soccer/app
+      - ./outputs:/home/soccer/app/outputs
+      - ./data:/home/soccer/app/data
+      - jupyter_cache:/tmp  # Temporary directory
+    environment:
+      - PYTHONUNBUFFERED=1
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-fifa-soccer-ds-2025}
+      - JUPYTER_CONFIG_DIR=/tmp/.jupyter
+      - JUPYTER_DATA_DIR=/tmp/.local/share/jupyter
+      - JUPYTER_RUNTIME_DIR=/tmp/.local/share/jupyter/runtime
+    networks:
+      - fifa-network
+    command: >
+      bash -c "
+        pip install --user --no-cache-dir jupyterlab ipywidgets &&
+        mkdir -p /tmp/.jupyter /tmp/.local/share/jupyter/runtime &&
+        ~/.local/bin/jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --ServerApp.token="${JUPYTER_TOKEN}" --ServerApp.password='' --ServerApp.allow_origin='' --ServerApp.disable_check_xsrf=False --ServerApp.allow_remote_access=True --ServerApp.max_body_size=10737418240
+      "
+    restart: unless-stopped
+    # Apply security configuration
+    <<: *common-security
+    # Jupyter-specific security
+    security_opt:
+      - no-new-privileges:true
+    # Override read-only for Jupyter work
+    read_only: false
+    # Jupyter health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/lab"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
+    # Resource limits for Jupyter
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+networks:
+  fifa-network:
+    driver: bridge
+    # Network security options
+    enable_ipv6: false
+    internal: false
+    labels:
+      - "com.fifa-soccer.network=production"
+
+# Named volumes for persistent data with security
+volumes:
+  # Development cache
+  dev_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/jey/cache/fifa-soccer-dev-cache
+  # Application cache
+  app_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/jey/cache/fifa-soccer-app-cache
+  # Training cache
+  trainer_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/jey/cache/fifa-soccer-trainer-cache
+  # MLflow cache
+  mlflow_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/jey/cache/fifa-soccer-mlflow-cache
+  # Jupyter cache
+  jupyter_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/jey/cache/fifa-soccer-jupyter-cache
+  # Jupyter data (legacy)
+  jupyter_data:
+    driver: local

@@ -1,0 +1,13 @@
+hydra:
+  run:
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ./multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job:
+    name: runtime
+
+runtime:
+  resolution:
+    width: 1280
+    height: 720
+  device: cuda_if_available

@@ -1,0 +1,6 @@
+[core]
+\trepo = file
+\tanalytics = false
+
+['remote "local"']
+\turl = data/cache

@@ -1,0 +1,9 @@
+sample_url: https://sample-videos.com/video321/mp4/720/big_buck_bunny_720p_1mb.mp4
+width: 1280
+height: 720
+stride: 5
+model_name: yolov8n
+data_version: v1.0
+max_epochs: 100
+batch_size: 8
+learning_rate: 0.001

@@ -1,0 +1,127 @@
+# FIFA Soccer DS - YouTube Pipeline Configuration
+# Centralized configuration management for all YouTube integration components
+
+# Pipeline Settings
+pipeline:
+  name: "YouTube Soccer Analyzer"
+  version: "1.0.0"
+  max_concurrent_analyses: 3
+  temp_dir: "/tmp/youtube_analysis"
+  cleanup_on_exit: true
+  
+# YouTube Video Processing
+youtube:
+  video:
+    max_duration_seconds: 1800  # 30 minutes max
+    preferred_quality: "720p"
+    fallback_qualities: ["480p", "360p"]
+    audio_format: "mp3"
+    audio_sample_rate: 16000
+    
+  download:
+    retries: 3
+    timeout_seconds: 300
+    progress_update_interval: 5.0
+    
+# Audio Processing
+audio:
+  transcription:
+    model: "base"  # tiny, base, small, medium, large
+    language: "auto"
+    chunk_length_seconds: 30
+    batch_size: 16
+    
+  analysis:
+    sample_rate: 22050
+    hop_length: 512
+    n_mels: 128
+    
+# Soccer Analysis
+soccer_analysis:
+  detection:
+    confidence_threshold: 0.75
+    iou_threshold: 0.5
+    max_detections_per_frame: 50
+    
+  tracking:
+    algorithm: "deepsort"  # deepsort, iou, byte_track
+    max_disappeared_frames: 30
+    max_age: 50
+    
+  classification:
+    min_soccer_confidence: 0.8
+    event_detection_threshold: 0.7
+    player_detection_threshold: 0.6
+
+# Output Settings
+output:
+  base_dir: "./outputs"
+  include_visualizations: true
+  include_transcription: true
+  include_metadata: true
+  generate_summary_report: true
+  
+  formats:
+    - "json"
+    - "csv"
+    - "txt"
+    
+  visualization:
+    format: "png"
+    dpi: 150
+    include_timestamps: true
+
+# Error Handling
+error_handling:
+  max_retries: 3
+  retry_delay_seconds: 5
+  fallback_on_error: true
+  log_all_errors: true
+  
+  recovery_strategies:
+    - "retry_with_reduced_quality"
+    - "skip_corrupted_segments"
+    - "fallback_to_metadata_only"
+
+# Monitoring & Health Checks
+monitoring:
+  enabled: true
+  metrics_endpoint: "http://localhost:9090/metrics"
+  health_check_interval: 30
+  
+  custom_metrics:
+    - "youtube_downloads_total"
+    - "analysis_duration_seconds"
+    - "soccer_events_detected"
+    - "confidence_scores"
+
+# API Settings
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  
+  rate_limiting:
+    requests_per_minute: 60
+    concurrent_analyses: 5
+    
+  cors:
+    enabled: true
+    origins: ["*"]
+    
+# Validation Rules
+validation:
+  video:
+    min_duration_seconds: 5
+    max_duration_seconds: 7200  # 2 hours
+    supported_formats: ["mp4", "avi", "mov", "mkv"]
+    min_resolution: "480p"
+    
+  audio:
+    min_duration_seconds: 1
+    max_duration_seconds: 3600  # 1 hour
+    sample_rates: [16000, 22050, 44100, 48000]
+    
+  output:
+    max_file_size_mb: 500
+    allowed_characters: "alphanumeric_plus_underscore_dash"

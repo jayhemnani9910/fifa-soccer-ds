@@ -1,0 +1,157 @@
+# Enhanced FIFA Soccer DS Pipeline with proper dependencies and error handling
+
+# Global configuration
+vars:
+  model_name: yolov8n
+  data_version: v1.0
+  max_epochs: 100
+  batch_size: 8
+  learning_rate: 0.001
+
+stages:
+  # Stage 1: Data Acquisition
+  fetch_sample:
+    cmd: python scripts/data/fetch_sample.py --url ${sample_url} --output data/raw/sample.mp4 --overwrite
+    deps:
+      - scripts/data/fetch_sample.py
+    params:
+      - sample_url
+    outs:
+      - data/raw/sample.mp4
+    metrics:
+      - fetch_sample_metrics.json
+    always_changed: true  # Force re-download for testing
+    
+  # Stage 2: Data Preprocessing  
+  preprocess:
+    cmd: >
+      python scripts/data/preprocess.py 
+      --input data/raw/sample.mp4 
+      --output-dir data/processed/sample 
+      --width ${width} 
+      --height ${height} 
+      --stride ${stride}
+    deps:
+      - data/raw/sample.mp4
+      - scripts/data/preprocess.py
+    params:
+      - width:
+          default: 1280
+      - height:
+          default: 720
+      - stride:
+          default: 5
+    outs:
+      - data/processed/sample
+    metrics:
+      - preprocess_metrics.json
+      
+  # Stage 3: Model Training (Detection)
+  train_detection:
+    cmd: >
+      python src/models/train_gcn.py 
+      --dataset data/processed/sample/dataset.pt 
+      --epochs ${max_epochs} 
+      --batch-size ${batch_size} 
+      --lr ${learning_rate} 
+      --checkpoint-dir checkpoints/detection 
+      --experiment-name "fifa_detection_${data_version}"
+    deps:
+      - data/processed/sample
+      - src/models/train_gcn.py
+      - src/models/gcn.py
+      - src/eval/metrics.py
+      - src/utils/mlflow_helper.py
+    params:
+      - max_epochs
+      - batch_size
+      - learning_rate
+      - data_version
+    outs:
+      - checkpoints/detection
+      - mlruns
+    metrics:
+      - training_metrics.json
+      
+  # Stage 4: TensorRT Export
+  export_tensorrt:
+    cmd: >
+      python src/detect/export_trt.py 
+      --onnx checkpoints/detection/best_model.onnx 
+      --output build/detection_${model_name}.plan 
+      --fp16 
+      --workspace 2147483648
+    deps:
+      - checkpoints/detection
+      - src/detect/export_trt.py
+      - src/detect/export_onnx.py
+    params:
+      - model_name
+    outs:
+      - build/detection_${model_name}.plan
+    metrics:
+      - tensorrt_export_metrics.json
+      
+  # Stage 5: Tracking Pipeline
+  run_tracking:
+    cmd: >
+      python src/pipeline_full.py 
+      --video data/raw/sample.mp4 
+      --model build/detection_${model_name}.plan 
+      --output outputs/tracking_results 
+      --calibration data/processed/sample/calibration.json
+    deps:
+      - data/raw/sample.mp4
+      - build/detection_${model_name}.plan
+      - src/pipeline_full.py
+      - src/track/bytetrack_runtime.py
+      - src/calib/homography.py
+    params:
+      - model_name
+    outs:
+      - outputs/tracking_results
+      - outputs/tracking_frames
+    metrics:
+      - tracking_metrics.json
+      
+  # Stage 6: Evaluation and Validation
+  evaluate:
+    cmd: >
+      python src/eval/evaluate_pipeline.py 
+      --results outputs/tracking_results 
+      --ground-truth data/processed/sample/annotations.json 
+      --output evaluation_results.json
+    deps:
+      - outputs/tracking_results
+      - data/processed/sample
+      - src/eval/evaluate_pipeline.py
+    outs:
+      - evaluation_results.json
+      - evaluation_plots
+    metrics:
+      - evaluation_metrics.json
+      
+  # Stage 7: Model Registry (Final Artifact)
+  register_model:
+    cmd: >
+      python scripts/model/register_model.py 
+      --model-path build/detection_${model_name}.plan 
+      --model-name fifa_detection_${data_version} 
+      --version ${data_version} 
+      --metrics evaluation_results.json
+    deps:
+      - build/detection_${model_name}.plan
+      - evaluation_results.json
+      - scripts/model/register_model.py
+    params:
+      - model_name
+      - data_version
+    outs:
+      - model_registry/fifa_detection_${data_version}
+      - model_registry/model_metadata.json
+    metrics:
+      - registration_metrics.json
+
+# Pipeline orchestration with proper dependencies
+# Each stage depends on previous successful completion
+# Prevents race conditions and ensures data integrity

@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - hydra: default
+
+runtime:
+  resolution:
+    width: 1280
+    height: 720
+  device: cuda_if_available
+  source:
+    url: 0
+    rtsp: false
+  live:
+    save_video: true
+    output_path: outputs/live/output.mp4
+    show_preview: true
+    fps_limit: 24

@@ -1,0 +1,10 @@
+.git
+.gitignore
+outputs/
+notebooks/
+__pycache__/
+*.pyc
+data/raw/*.mp4
+data/raw/*.mkv
+data/raw/*.avi
+data/raw/*.mov
