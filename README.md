@@ -1,191 +1,170 @@
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Open-2ea44f?style=for-the-badge)](https://jayhemnani9910.github.io/fifa-soccer-ds/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](LICENSE)
 
-# FIFA Soccer DS Analytics
+# FIFA Soccer DS
 
-**Production-ready computer vision pipeline for analyzing FIFA gameplay and YouTube soccer highlights**
+**Production-ready computer vision pipeline for analyzing soccer gameplay and YouTube highlights.**
 
-This project provides a complete, end-to-end CV pipeline for soccer video analysis with unique capabilities:
-- **YouTube Integration**: Analyze both FIFA gameplay footage AND real-world soccer highlights from YouTube
-- **Graph Neural Networks**: GraphSAGE-based player interaction modeling for tactical analysis
-- **Live Streaming**: Real-time RTSP stream processing and inference
-- **Production Ready**: FastAPI deployment, MLflow tracking, DVC data versioning, automated retraining
+Multi-model tracking with YOLOv8 detection, ByteTrack persistence, and GraphSAGE neural networks for tactical pattern recognition — served via FastAPI with full MLOps infrastructure.
 
-## What Makes This Different
+> **22 FPS** on 8GB GPU (RTX 3070 class) &bull; **YouTube + FIFA** dual-source support &bull; **Live RTSP** streaming
 
-This project is **NOT**:
-- **fifa-ai** - which focuses on playing the FIFA game using AI agents
-- **agentic-vscode** - which is a research prototype for AI-assisted development
-- **jhsoccer** - which focuses primarily on tactical analytics without the CV pipeline
-
-This project **IS**:
-- A complete production pipeline from video ingestion to graph-based analytics
-- Optimized for both simulated (FIFA) and real-world (YouTube) soccer footage
-- Battle-tested with automated training, monitoring, and deployment workflows
-
-## Technology Stack
-
-- **Detection**: YOLOv8 (fine-tuned for soccer players, ball, referees)
-- **Tracking**: ByteTrack with Kalman filtering for robust multi-object tracking
-- **Graph ML**: PyTorch Geometric + GraphSAGE for player interaction networks
-- **API**: FastAPI for production inference endpoints
-- **Monitoring**: MLflow for experiment tracking and model versioning
-- **Data**: DVC for dataset versioning and pipeline orchestration
-- **Streaming**: RTSP live stream support with real-time processing
-
-## Quickstart
-
-1. Install Python 3.11 and the system libraries needed by PyTorch, OpenCV, and FFmpeg.
-2. Create a virtual environment and install dependencies:
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   make setup
-   ```
-3. Optional: fetch and preprocess the toy dataset.
-   ```bash
-   dvc repro fetch_sample preprocess
-   ```
-4. Sanity check detection and tracking:
-   ```bash
-   make smoke      # lightweight tests
-   make run-detect # writes outputs/detect/*
-   ```
-5. Run the full pipeline (detection + tracking + graph):
-   ```bash
-   python -m src.pipeline_full \
-     --frames-dir data/processed/sample \
-     --output-dir outputs/pipeline_run \
-     --distance-threshold 120.0 \
-     --min-confidence 0.35 \
-     --max-age 20
-   ```
-6. Launch the live pipeline once you have a camera/RTSP stream:
-   ```bash
-   make run-live URL=rtsp://example/stream
-   ```
-
-## Project Status
-
-**COMPLETE AND PRODUCTION-READY**
-
-This pipeline is fully implemented with:
-- Automated CI/CD testing and deployment
-- Production FastAPI endpoints for inference
-- Weekly automated model retraining workflows
-- Comprehensive monitoring and experiment tracking
-- Performance: 22 FPS on 8GB GPU (RTX 3070 class)
-
-## Repository Layout
-
-```
-├── src
-│   ├── detect      # YOLOv8 inference + export utilities
-│   ├── track       # ByteTrack + Kalman filter pipelines
-│   ├── graph       # Track-to-graph builders for GNN input
-│   ├── models      # GraphSAGE architecture and training
-│   ├── live        # RTSP capture + real-time overlay
-│   └── utils       # Visualization, MLflow, overlay helpers
-├── scripts         # Data fetching (YouTube) and preprocessing
-├── tests           # Smoke/unit coverage for all pipeline stages
-├── configs         # Hydra runtime configurations
-├── docs            # Pipeline guides and experiment results
-├── data/           # Raw/processed video assets (DVC tracked)
-├── mlruns/         # MLflow experiment tracking artifacts
-└── .dvc/           # DVC metadata for dataset versioning
-```
-
-## Key Features
-
-### 1. YouTube + FIFA Video Support
-- Automated YouTube highlight download and processing
-- FIFA gameplay footage analysis
-- Unified pipeline handles both simulated and real-world footage
-- Adaptive preprocessing for different video qualities and formats
-
-### 2. GraphSAGE Player Interaction Modeling
-- Constructs spatial-temporal graphs from tracked player positions
-- GraphSAGE GNN learns player role embeddings and tactical patterns
-- Identifies passing networks, defensive formations, pressing behavior
-- Position classification and tactical analysis
-
-### 3. Live RTSP Streaming
-- Real-time processing of RTSP camera streams
-- Frame-by-frame detection, tracking, and overlay
-- Low-latency inference pipeline optimized for live deployment
-- WebRTC/HLS re-streaming capabilities via FastAPI
-
-### 4. Production MLOps
-- **MLflow**: Automatic experiment tracking, model versioning, metric logging
-- **DVC**: Dataset versioning, reproducible preprocessing pipelines
-- **FastAPI**: REST endpoints for batch and real-time inference
-- **Automated Retraining**: Weekly model updates with performance monitoring
-
-## Data Management
-
-- DVC orchestrates dataset fetching and preprocessing. Inspect `dvc.yaml` for the declarative pipeline.
-- Run `dvc repro fetch_sample preprocess` to download the placeholder clip and generate resized frame stacks under `data/processed/sample/`.
-- YouTube integration: The pipeline can automatically fetch and process YouTube soccer highlights
-- Replace the URL in `scripts/data/fetch_sample.py` with authorized SoccerNet or Metrica Sports snippets for additional datasets
-- Extend `scripts/data/preprocess.py` when adding pitch segmentation or temporal sampling logic; record new steps as additional DVC stages.
-
-## Full Pipeline Usage
-The unified pipeline (`src/pipeline_full.py`) integrates detection, tracking, and graph construction:
-
-```bash
-python -m src.pipeline_full \
-  --frames-dir data/processed/pedri \
-  --output-dir outputs/pedri_analysis \
-  --confidence 0.35 \
-  --distance-threshold 120.0 \
-  --max-age 20
-```
-
-**Tuned defaults (optimized for La Liga football):**
-- `confidence=0.35`: Balances detection recall vs. false positives for distant players
-- `distance_threshold=120.0`: Accounts for player movement (~80-120px/frame at 30fps)
-- `max_age=20`: Recovers from 3-5 frame occlusions (passes, tackles)
-
-**Output structure:**
-- `pipeline_summary.json`: Overall statistics (detections, tracks, graph edges)
-- `detections/`: Raw YOLO detection JSON per frame
-- `tracklets.json`: Complete track history with confidence scores
-- `graph/`: Spatial-temporal graph for position classification
-
-### Detailed Documentation
-
-For comprehensive usage, frame extraction, live API deployment, and troubleshooting:
-**See [`docs/PIPELINE_GUIDE.md`](docs/PIPELINE_GUIDE.md)**
-
-Key topics:
-- Frame preparation and codec conversion
-- Step-by-step pipeline execution
-- Output format specifications
-- Performance benchmarks (22 FPS on 8GB GPU)
-- Live inference via FastAPI
-- Weekly retraining automation
-- Parameter tuning for different field positions
-
-See also `docs/experiments/` for example runs and parameter tuning results.
+---
 
 ## Pipeline Architecture
 
-The complete pipeline consists of these stages:
+```
+┌─────────────────┐     ┌──────────────┐     ┌──────────────┐
+│  Video Source    │     │   Detection  │     │   Tracking   │
+│  YouTube / RTSP │────▶│   YOLOv8     │────▶│  ByteTrack   │
+│  FIFA Gameplay   │     │  (fine-tuned) │     │  + Kalman    │
+└─────────────────┘     └──────────────┘     └──────┬───────┘
+                                                     │
+                     ┌───────────────┐     ┌─────────▼────────┐
+                     │  FastAPI      │     │  Graph Builder    │
+                     │  REST + Live  │◀────│  Spatial-Temporal │
+                     └───────┬───────┘     └─────────┬────────┘
+                             │                       │
+                     ┌───────▼───────┐     ┌─────────▼────────┐
+                     │  MLflow       │     │  GraphSAGE GNN   │
+                     │  Tracking     │     │  Tactical Analysis│
+                     └───────────────┘     └──────────────────┘
+```
 
-1. **Video Ingestion** → YouTube downloads or RTSP streams
-2. **Detection** → YOLOv8 identifies players, ball, referees
-3. **Tracking** → ByteTrack maintains IDs across frames with Kalman filtering
-4. **Graph Construction** → Spatial-temporal graphs from tracked positions
-5. **GNN Analysis** → GraphSAGE learns player interactions and tactical patterns
-6. **Visualization/API** → Annotated overlays or REST endpoints
+Each stage logs metrics to MLflow and can run independently or as a unified pipeline.
 
-Each stage logs metrics to MLflow and can be run independently or as a unified pipeline.
+---
+
+## Key Features
+
+### Detection & Tracking
+- **YOLOv8** fine-tuned for soccer: players, ball, referees
+- **ByteTrack** with Kalman filtering for robust multi-object tracking across occlusions
+- Tuned for La Liga footage: `confidence=0.35`, `distance_threshold=120px`, `max_age=20` frames
+
+### Graph Neural Networks
+- Constructs **spatial-temporal graphs** from tracked player positions
+- **GraphSAGE** learns player role embeddings and tactical patterns
+- Identifies passing networks, defensive formations, pressing behavior
+- GCN-based position classification
+
+### Live Streaming
+- Real-time **RTSP** camera stream processing with frame-by-frame inference
+- Low-latency overlay rendering
+- WebRTC/HLS re-streaming via FastAPI
+
+### MLOps & Production
+- **MLflow**: Experiment tracking, model versioning, metric logging
+- **DVC**: Dataset versioning and reproducible preprocessing pipelines
+- **FastAPI**: REST endpoints for batch and real-time inference
+- **Automated Retraining**: Weekly model updates with performance monitoring
+
+### Dual Video Source
+- Automated **YouTube** highlight download and processing
+- **FIFA** gameplay footage analysis
+- Adaptive preprocessing for different video qualities and formats
+
+---
+
+## Tech Stack
+
+![YOLOv8](https://img.shields.io/badge/YOLOv8-00FFFF?style=flat&logoColor=black)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat&logo=pytorch&logoColor=white)
+![PyG](https://img.shields.io/badge/PyTorch_Geometric-3C2179?style=flat&logo=pyg&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white)
+![MLflow](https://img.shields.io/badge/MLflow-0194E2?style=flat&logo=mlflow&logoColor=white)
+![DVC](https://img.shields.io/badge/DVC-13ADC7?style=flat&logo=dvc&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)
+![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?style=flat&logo=opencv&logoColor=white)
+
+---
+
+## Quickstart
+
+```bash
+# 1. Setup environment
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+make setup    # installs git hooks
+
+# 2. Fetch sample data
+dvc repro fetch_sample preprocess
+
+# 3. Smoke test
+make smoke        # lightweight tests
+make run-detect   # outputs to outputs/detect/
+
+# 4. Run the full pipeline (detect → track → graph)
+python -m src.pipeline_full \
+  --frames-dir data/processed/sample \
+  --output-dir outputs/pipeline_run \
+  --distance-threshold 120.0 \
+  --min-confidence 0.35 \
+  --max-age 20
+
+# 5. Live streaming (requires RTSP source)
+make run-live URL=rtsp://example/stream
+```
+
+---
+
+## Project Structure
+
+```
+├── src/
+│   ├── detect/       # YOLOv8 inference, ONNX/TRT export, LoRA adapters
+│   ├── track/        # ByteTrack + Kalman filter pipeline
+│   ├── graph/        # Track-to-graph builders for GNN input
+│   ├── models/       # GraphSAGE architecture and training
+│   ├── analytics/    # Tactical analysis, team classification, pitch control
+│   ├── live/         # RTSP capture + real-time overlay
+│   ├── youtube/      # Video download, audio extraction, metadata parsing
+│   ├── api/          # FastAPI endpoints (inference + YouTube)
+│   ├── calib/        # Homography and pitch transformation
+│   └── utils/        # Visualization, MLflow helpers, monitoring
+├── scripts/          # Data fetching, preprocessing, performance testing
+├── tests/            # Smoke, unit, e2e, and security test suites
+├── configs/          # Hydra runtime configurations
+├── dvc.yaml          # Declarative DVC pipeline stages
+└── Makefile          # Common commands (setup, test, run, deploy)
+```
+
+---
+
+## Pipeline Output
+
+Running the full pipeline produces:
+
+| Output | Description |
+|--------|-------------|
+| `pipeline_summary.json` | Overall statistics (detections, tracks, graph edges) |
+| `detections/` | Raw YOLO detection JSON per frame |
+| `tracklets.json` | Complete track history with confidence scores |
+| `graph/` | Spatial-temporal graph for position classification |
+
+---
+
+## Performance
+
+| Metric | Value |
+|--------|-------|
+| Inference FPS | **22 FPS** (8GB GPU, RTX 3070 class) |
+| Detection model | YOLOv8 (fine-tuned, 3 classes) |
+| Tracking | ByteTrack with Kalman filtering |
+| Occlusion recovery | 3-5 frame gaps (`max_age=20`) |
+
+---
 
 ## Contributing
-- Install Git hooks with `make setup` so formatting and static analysis run automatically.
-- Before submitting a PR, execute `make lint-all` and `make test`; include updated smoke/e2e coverage for new behaviours.
-- Document notable architectural decisions in `docs/` (create as needed) and surface contributor notes in `AGENTS.md`.
-- Follow Conventional Commit messages (`feat:`, `fix:`, `chore:`) and keep each pull request focused with linked issues/screenshots where applicable.
 
-See `AGENTS.md` for contributor guidelines tailored to this project.
+- Install git hooks with `make setup`
+- Run `make lint-all` and `make test` before submitting PRs
+- Follow Conventional Commit messages (`feat:`, `fix:`, `chore:`)
+- See `AGENTS.md` for contributor guidelines
+
+---
+
+## License
+
+MIT
