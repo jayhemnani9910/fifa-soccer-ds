@@ -288,35 +288,35 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: /home/jey/cache/fifa-soccer-dev-cache
+      device: /home/po/cache/fifa-soccer-dev-cache
   # Application cache
   app_cache:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /home/jey/cache/fifa-soccer-app-cache
+      device: /home/po/cache/fifa-soccer-app-cache
   # Training cache
   trainer_cache:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /home/jey/cache/fifa-soccer-trainer-cache
+      device: /home/po/cache/fifa-soccer-trainer-cache
   # MLflow cache
   mlflow_cache:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /home/jey/cache/fifa-soccer-mlflow-cache
+      device: /home/po/cache/fifa-soccer-mlflow-cache
   # Jupyter cache
   jupyter_cache:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /home/jey/cache/fifa-soccer-jupyter-cache
+      device: /home/po/cache/fifa-soccer-jupyter-cache
   # Jupyter data (legacy)
   jupyter_data:
     driver: local
