@@ -59,6 +59,7 @@ extend-exclude = [
   "dist",
   "mlruns",
 ]
+lint.isort.known-first-party = ["src"]
 lint.select = [
   "E",
   "F",
