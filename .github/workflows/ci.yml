@@ -18,7 +18,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install ruff
-        run: pip install 'ruff>=0.3,<1.0'
+        run: pip install ruff==0.3.0
 
       - name: Lint
         run: ruff check src tests
@@ -41,8 +41,8 @@ jobs:
           pip install --upgrade pip setuptools wheel
           # Use CPU-only PyTorch for CI
           pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cpu
-          # Install remaining deps, skipping problematic packages
-          pip install $(grep -v -E '^(torch==|torchvision==|onnxruntime-gpu|openai-whisper|torch-geometric|librosa)' requirements.txt | tr '\n' ' ')
+          # Install remaining deps, skipping GPU/problematic packages and comments
+          grep -v -E '^(#|torch==|torchvision==|onnxruntime-gpu|openai-whisper|torch-geometric|librosa)' requirements.txt | grep -v '^\s*$' | pip install -r /dev/stdin
           pip install pytest pytest-cov
 
       - name: Run smoke tests
