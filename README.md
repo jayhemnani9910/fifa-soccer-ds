@@ -1,3 +1,4 @@
+[![CI](https://github.com/jayhemnani9910/fifa-soccer-ds/actions/workflows/ci.yml/badge.svg)](https://github.com/jayhemnani9910/fifa-soccer-ds/actions/workflows/ci.yml)
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Open-2ea44f?style=for-the-badge)](https://jayhemnani9910.github.io/fifa-soccer-ds/)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](LICENSE)
