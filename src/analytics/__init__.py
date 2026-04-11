@@ -8,10 +8,10 @@ This module provides:
 """
 
 from src.analytics.tactical import (
+    PitchControlResult,
+    PlayerState,
     TacticalAnalyzer,
     TacticalConfig,
-    PlayerState,
-    PitchControlResult,
 )
 from src.analytics.team_classifier import (
     JerseyColorClassifier,

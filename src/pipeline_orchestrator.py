@@ -10,23 +10,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-import tempfile
 import shutil
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+import tempfile
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
+from typing import Any
+
+from .classify.soccer_classifier import SoccerClassifier
 
 # Import pipeline components
 from .schemas import (
-    PipelineOutput, YouTubeAnalysisRequest, VideoMetadata, 
-    SoccerClassification, PlayerAnalysis, validate_youtube_url
+    PipelineOutput,
+    PlayerAnalysis,
+    SoccerClassification,
+    VideoMetadata,
+    YouTubeAnalysisRequest,
+    validate_youtube_url,
 )
-from .youtube import YouTubeDownloader, AudioExtractor, YouTubeMetadataParser
-from .classify.soccer_classifier import SoccerClassifier
 from .utils.health_checks import health_check
+from .youtube import AudioExtractor, YouTubeDownloader, YouTubeMetadataParser
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -50,7 +56,7 @@ class StageResult:
     stage: ProcessingStage
     success: bool
     data: Any = None
-    error: Optional[str] = None
+    error: str | None = None
     duration: float = 0.0
     retry_count: int = 0
 
@@ -61,13 +67,13 @@ class PipelineContext:
     request: YouTubeAnalysisRequest
     output_dir: Path
     temp_dir: Path
-    video_path: Optional[Path] = None
-    frames_dir: Optional[Path] = None
-    audio_path: Optional[Path] = None
-    metadata: Optional[VideoMetadata] = None
-    stage_results: List[StageResult] = field(default_factory=list)
-    transcription: Optional[Dict[str, Any]] = None
-    classification_results: Optional[Dict[str, Any]] = None
+    video_path: Path | None = None
+    frames_dir: Path | None = None
+    audio_path: Path | None = None
+    metadata: VideoMetadata | None = None
+    stage_results: list[StageResult] = field(default_factory=list)
+    transcription: dict[str, Any] | None = None
+    classification_results: dict[str, Any] | None = None
 
 
 class PipelineOrchestrator:
@@ -96,7 +102,7 @@ class PipelineOrchestrator:
         
         logger.info("Pipeline orchestrator initialized")
     
-    def _load_config(self) -> Dict[str, Any]:
+    def _load_config(self) -> dict[str, Any]:
         """Load pipeline configuration."""
         try:
             # For now, use default config without YAML dependency
@@ -105,7 +111,7 @@ class PipelineOrchestrator:
             logger.error(f"Failed to load config: {e}")
             return self._get_default_config()
     
-    def _get_default_config(self) -> Dict[str, Any]:
+    def _get_default_config(self) -> dict[str, Any]:
         """Get default configuration."""
         return {
             'error_handling': {
@@ -292,7 +298,6 @@ class PipelineOrchestrator:
             frames_dir.mkdir(exist_ok=True)
             
             # Extract frames at specified rate
-            frame_rate = context.request.frame_rate
             # Here you would implement actual frame extraction logic
             # For now, create a placeholder
             context.frames_dir = frames_dir
@@ -455,7 +460,7 @@ async def create_pipeline_orchestrator(config_path: str = "configs/youtube_pipel
     return PipelineOrchestrator(config_path)
 
 
-async def process_youtube_url(url: str, output_dir: Optional[str] = None, **kwargs) -> PipelineOutput:
+async def process_youtube_url(url: str, output_dir: str | None = None, **kwargs) -> PipelineOutput:
     """Convenience function to process a YouTube URL."""
     
     # Create request object
@@ -484,7 +489,7 @@ if __name__ == "__main__":
         # Process video
         try:
             result = await orchestrator.process_youtube_video(request)
-            print(f"Pipeline completed successfully!")
+            print("Pipeline completed successfully!")
             print(f"Output: {result}")
         except Exception as e:
             print(f"Pipeline failed: {e}")

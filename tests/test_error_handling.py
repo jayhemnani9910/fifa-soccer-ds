@@ -3,7 +3,7 @@
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -179,7 +179,7 @@ class TestPipelineErrorHandling:
             for i in range(3):
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
             
-            summary = process_frames_directory(
+            process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
                 config=PipelineConfig(max_frames=3),

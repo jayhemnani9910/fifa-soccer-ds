@@ -6,24 +6,23 @@ YouTube soccer analysis pipeline.
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import os
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from src.pipeline_orchestrator import PipelineOrchestrator, create_pipeline_orchestrator
-from src.schemas import YouTubeAnalysisRequest, TaskStatus, PipelineOutput
+from src.schemas import TaskStatus, YouTubeAnalysisRequest
 from src.utils.health_checks import health_check
-from src.utils.monitoring import get_system_metrics, get_gpu_memory_usage
+from src.utils.monitoring import get_gpu_memory_usage, get_system_metrics
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -56,7 +55,6 @@ ALLOWED_ORIGINS = [
 ]
 
 # Add production origins from environment variable (comma-separated)
-import os
 _extra_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
 if _extra_origins:
     ALLOWED_ORIGINS.extend([origin.strip() for origin in _extra_origins.split(",") if origin.strip()])
@@ -71,18 +69,18 @@ app.add_middleware(
 )
 
 # Global storage for task status (in production, use Redis or database)
-task_storage: Dict[str, TaskStatus] = {}
+task_storage: dict[str, TaskStatus] = {}
 
 # Global orchestrator instance
-orchestrator: Optional[PipelineOrchestrator] = None
+orchestrator: PipelineOrchestrator | None = None
 
 
 class AnalyzeRequest(BaseModel):
     """Request model for video analysis."""
     youtube_url: HttpUrl
-    output_dir: Optional[str] = None
+    output_dir: str | None = None
     frame_rate: float = 1.0
-    max_duration: Optional[int] = 300
+    max_duration: int | None = 300
     include_audio: bool = True
     confidence_threshold: float = 0.75
     force_full_analysis: bool = False
@@ -93,7 +91,7 @@ class AnalyzeResponse(BaseModel):
     task_id: str
     status: str
     message: str
-    estimated_duration: Optional[float] = None
+    estimated_duration: float | None = None
 
 
 class HealthResponse(BaseModel):
@@ -101,8 +99,8 @@ class HealthResponse(BaseModel):
     status: str
     timestamp: datetime
     version: str
-    system_metrics: Dict[str, Any]
-    gpu_memory: Optional[int] = None
+    system_metrics: dict[str, Any]
+    gpu_memory: int | None = None
     active_tasks: int
 
 
@@ -111,11 +109,11 @@ class TaskResponse(BaseModel):
     task_id: str
     status: str
     progress: float
-    message: Optional[str] = None
+    message: str | None = None
     created_at: datetime
     updated_at: datetime
-    results: Optional[Dict[str, Any]] = None
-    error_details: Optional[str] = None
+    results: dict[str, Any] | None = None
+    error_details: str | None = None
 
 
 @app.on_event("startup")
@@ -138,7 +136,7 @@ async def startup_event():
         raise
 
 
-@app.get("/", response_model=Dict[str, str])
+@app.get("/", response_model=dict[str, str])
 async def root():
     """Root endpoint with API information."""
     return {
@@ -254,9 +252,9 @@ async def get_task_status(task_id: str):
     )
 
 
-@app.get("/tasks", response_model=List[TaskResponse])
+@app.get("/tasks", response_model=list[TaskResponse])
 async def list_tasks(
-    status: Optional[str] = Query(None, description="Filter by status"),
+    status: str | None = Query(None, description="Filter by status"),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of tasks to return")
 ):
     """List analysis tasks."""
@@ -306,7 +304,7 @@ async def cancel_task(task_id: str):
     return {"message": f"Task {task_id} cancelled"}
 
 
-@app.get("/metrics", response_model=Dict[str, Any])
+@app.get("/metrics", response_model=dict[str, Any])
 async def get_metrics():
     """Get system and pipeline metrics."""
     try:
@@ -332,7 +330,7 @@ async def get_metrics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/pipeline/info", response_model=Dict[str, Any])
+@app.get("/pipeline/info", response_model=dict[str, Any])
 async def get_pipeline_info():
     """Get pipeline configuration and information."""
     if orchestrator is None:
@@ -360,16 +358,16 @@ async def get_pipeline_info():
 
 class TacticalComputeRequest(BaseModel):
     """Request model for computing tactical metrics."""
-    players: List[Dict[str, Any]]  # List of {player_id, team_id, position: [x, y]}
+    players: list[dict[str, Any]]  # List of {player_id, team_id, position: [x, y]}
     frame_id: int = 0
-    grid_shape: List[int] = [12, 16]
+    grid_shape: list[int] = [12, 16]
 
 
 class TacticalComputeResponse(BaseModel):
     """Response model for tactical computation."""
     frame_id: int
-    pitch_control: Dict[str, Any]
-    obso: Dict[str, Any]
+    pitch_control: dict[str, Any]
+    obso: dict[str, Any]
 
 
 @app.post("/tactical/compute", response_model=TacticalComputeResponse)
@@ -396,8 +394,9 @@ async def compute_tactical_metrics(request: Request, req: TacticalComputeRequest
     """
     try:
         # Import tactical modules
-        from src.analytics.tactical import TacticalAnalyzer, TacticalConfig, PlayerState
         import numpy as np
+
+        from src.analytics.tactical import PlayerState, TacticalAnalyzer, TacticalConfig
 
         # Initialize analyzer
         config = TacticalConfig(grid_shape=tuple(req.grid_shape))
@@ -438,7 +437,7 @@ async def compute_tactical_metrics(request: Request, req: TacticalComputeRequest
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/tactical/info", response_model=Dict[str, Any])
+@app.get("/tactical/info", response_model=dict[str, Any])
 async def get_tactical_info():
     """Get information about tactical analytics capabilities."""
     return {
@@ -487,7 +486,7 @@ async def get_tactical_info():
     }
 
 
-@app.get("/tactical/results/{task_id}", response_model=Dict[str, Any])
+@app.get("/tactical/results/{task_id}", response_model=dict[str, Any])
 async def get_tactical_results(task_id: str):
     """Get tactical analytics results for a completed analysis task."""
     if task_id not in task_storage:

@@ -13,11 +13,9 @@ import argparse
 import hashlib
 import json
 import logging
-import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import torch
 from torch.optim import AdamW
@@ -30,7 +28,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from src.eval.metrics import accuracy, f1_score
 from src.models.gcn import GraphSAGENet, create_dataloader, forward_pass
-from src.utils.mlflow_helper import start_run, log_run_metrics, log_run_params, log_run_artifacts
+from src.utils.mlflow_helper import log_run_artifacts, log_run_metrics, log_run_params, start_run
 
 LOGGER = logging.getLogger(__name__)
 
@@ -69,8 +67,8 @@ def get_dataset_version(dataset_path: Path) -> str:
 
 def generate_experiment_name(
     model_type: str = "graphsage",
-    dataset_path: Optional[Path] = None,
-    custom_suffix: Optional[str] = None
+    dataset_path: Path | None = None,
+    custom_suffix: str | None = None
 ) -> str:
     """Generate unique MLflow experiment name to avoid collisions.
     
@@ -262,8 +260,8 @@ def run_training(
     device: str | None = None,
     early_stopping_patience: int = 3,
     checkpoint_dir: str | Path | None = None,
-    dataset_path: Optional[Path] = None,
-    experiment_name: Optional[str] = None,
+    dataset_path: Path | None = None,
+    experiment_name: str | None = None,
     enable_mlflow: bool = True,
 ) -> tuple[GraphSAGENet, dict]:
     """Run full training loop with checkpointing, early stopping, and MLflow tracking.
@@ -322,7 +320,6 @@ def run_training(
     final_epoch = 0
 
     # Generate unique experiment name if MLflow enabled
-    mlflow_run = None
     if enable_mlflow:
         if experiment_name is None:
             experiment_name = generate_experiment_name(
@@ -332,7 +329,7 @@ def run_training(
             )
         
         # Start MLflow run with comprehensive tracking
-        mlflow_run = start_run(
+        start_run(
             experiment=experiment_name,
             run_name=f"graphsage_train_{datetime.utcnow().strftime('%H%M%S')}",
             tags={

@@ -16,7 +16,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import torch
 
@@ -53,7 +53,7 @@ class TensorRTMemoryManager:
     """Manages TensorRT object lifecycle and GPU memory cleanup."""
     
     def __init__(self):
-        self._objects: Dict[str, Any] = {}
+        self._objects: dict[str, Any] = {}
         self._logger = logging.getLogger(self.__class__.__name__)
     
     def register_object(self, name: str, obj: Any) -> None:
@@ -335,7 +335,7 @@ if __name__ == "__main__":
     if args.batch and args.batch_config:
         # Batch export mode
         import json
-        with open(args.batch_config, 'r') as f:
+        with open(args.batch_config) as f:
             batch_configs = json.load(f)
         
         configs = [TensorRTExportConfig(**cfg) for cfg in batch_configs]

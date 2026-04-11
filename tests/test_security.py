@@ -1,9 +1,8 @@
 """Test security-related functionality."""
 
-import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -139,7 +138,7 @@ class TestResourceLimits:
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
             
             start_time = time.time()
-            summary = process_frames_directory(
+            process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
                 config=PipelineConfig(max_frames=50),

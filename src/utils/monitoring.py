@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
 
 try:
     import torch

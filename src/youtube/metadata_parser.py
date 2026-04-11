@@ -7,12 +7,10 @@ from YouTube videos for content analysis.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any
 
-from src.schemas import VideoMetadata, validate_youtube_url, validate_video_metadata
+from src.schemas import VideoMetadata, validate_video_metadata, validate_youtube_url
 
 try:
     import yt_dlp
@@ -67,7 +65,7 @@ class YouTubeMetadataParser:
             'full_match': (3600, 10800),  # 1-3 hours
         }
     
-    def extract_metadata(self, youtube_url: str) -> Dict[str, Any]:
+    def extract_metadata(self, youtube_url: str) -> dict[str, Any]:
         """Extract comprehensive metadata from YouTube video.
         
         Args:
@@ -117,7 +115,7 @@ class YouTubeMetadataParser:
             LOGGER.error("Failed to extract metadata from %s: %s", youtube_url, e)
             raise RuntimeError(f"Metadata extraction failed: {e}") from e
     
-    def _get_video_info(self, youtube_url: str) -> Dict[str, Any]:
+    def _get_video_info(self, youtube_url: str) -> dict[str, Any]:
         """Get basic video information."""
         ydl_opts = {
             'quiet': True,
@@ -163,7 +161,7 @@ class YouTubeMetadataParser:
             
             return video_info
     
-    def _analyze_content(self, video_info: Dict[str, Any]) -> Dict[str, Any]:
+    def _analyze_content(self, video_info: dict[str, Any]) -> dict[str, Any]:
         """Analyze video content for soccer relevance."""
         title = video_info.get('title', '').lower()
         description = video_info.get('description', '').lower()
@@ -213,7 +211,7 @@ class YouTubeMetadataParser:
         
         return analysis
     
-    def _categorize_duration(self, duration: Optional[int]) -> str:
+    def _categorize_duration(self, duration: int | None) -> str:
         """Categorize video by duration."""
         if duration is None:
             return 'unknown'
@@ -224,7 +222,7 @@ class YouTubeMetadataParser:
         
         return 'very_long'  # 3+ hours
     
-    def _analyze_content_type(self, title: str, description: str, tags: List[str]) -> str:
+    def _analyze_content_type(self, title: str, description: str, tags: list[str]) -> str:
         """Analyze content type based on title, description, and tags."""
         title_lower = title.lower()
         desc_lower = description.lower()
@@ -248,7 +246,7 @@ class YouTubeMetadataParser:
         else:
             return 'other'
     
-    def _analyze_channel(self, uploader: str) -> Dict[str, Any]:
+    def _analyze_channel(self, uploader: str) -> dict[str, Any]:
         """Analyze uploader/channel for soccer relevance."""
         soccer_channels = [
             'espn', 'fox sports', 'sky sports', 'bt sport',
@@ -279,7 +277,7 @@ class YouTubeMetadataParser:
         else:
             return 'unknown'
     
-    def _analyze_engagement(self, video_info: Dict[str, Any]) -> Dict[str, Any]:
+    def _analyze_engagement(self, video_info: dict[str, Any]) -> dict[str, Any]:
         """Analyze engagement metrics."""
         view_count = video_info.get('view_count', 0)
         like_count = video_info.get('like_count', 0)
@@ -339,7 +337,7 @@ class YouTubeMetadataParser:
         else:
             return 'english'  # Default
     
-    def predict_soccer_content(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    def predict_soccer_content(self, metadata: dict[str, Any]) -> dict[str, Any]:
         """Predict if content is soccer-related based on metadata.
         
         Args:
@@ -380,7 +378,7 @@ class YouTubeMetadataParser:
         
         return prediction
     
-    def _generate_prediction_reasoning(self, keyword_score: float, channel_score: float, content_type: str) -> List[str]:
+    def _generate_prediction_reasoning(self, keyword_score: float, channel_score: float, content_type: str) -> list[str]:
         """Generate reasoning for the prediction."""
         reasoning = []
         
@@ -390,7 +388,7 @@ class YouTubeMetadataParser:
             reasoning.append(f"Moderate keyword relevance ({keyword_score:.2%})")
         
         if channel_score > 0:
-            reasoning.append(f"Soccer-related channel detected")
+            reasoning.append("Soccer-related channel detected")
         
         if content_type in ['highlights', 'full_match']:
             reasoning.append(f"Soccer content type: {content_type}")
@@ -399,7 +397,7 @@ class YouTubeMetadataParser:
         
         return reasoning
     
-    def _create_validated_metadata(self, video_info: Dict[str, Any]) -> VideoMetadata:
+    def _create_validated_metadata(self, video_info: dict[str, Any]) -> VideoMetadata:
         """Create validated VideoMetadata from raw video info."""
         try:
             # Convert upload_date string to datetime
@@ -456,7 +454,7 @@ class YouTubeMetadataParser:
 
 
 # Convenience functions
-def extract_youtube_metadata(youtube_url: str) -> Dict[str, Any]:
+def extract_youtube_metadata(youtube_url: str) -> dict[str, Any]:
     """Extract metadata from YouTube video.
     
     Args:
@@ -469,7 +467,7 @@ def extract_youtube_metadata(youtube_url: str) -> Dict[str, Any]:
     return parser.extract_metadata(youtube_url)
 
 
-def predict_soccer_content(youtube_url: str) -> Dict[str, Any]:
+def predict_soccer_content(youtube_url: str) -> dict[str, Any]:
     """Predict if YouTube content is soccer-related.
     
     Args:

@@ -1,9 +1,8 @@
 """Test MLflow integration and configuration."""
 
-import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.pipeline_full import PipelineConfig, process_frames_directory
 
@@ -46,7 +45,7 @@ class TestMLflowIntegration:
             for i in range(3):
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
             
-            summary = process_frames_directory(
+            process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
                 config=PipelineConfig(
@@ -137,7 +136,7 @@ class TestMLflowIntegration:
             for i in range(3):
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
             
-            summary = process_frames_directory(
+            process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
                 config=PipelineConfig(max_frames=3),
@@ -184,7 +183,9 @@ class TestMLflowIntegration:
         """Test accurate MLflow metrics calculation."""
         mock_run = MagicMock()
         
-        with patch('src.pipeline_full.start_run', return_value.__enter__(return_value=mock_run)):
+        with patch('src.pipeline_full.start_run') as mock_start_run:
+            mock_start_run.return_value.__enter__ = MagicMock(return_value=mock_run)
+            mock_start_run.return_value.__exit__ = MagicMock(return_value=False)
             with tempfile.TemporaryDirectory() as tmp_dir:
                 frames_dir = Path(tmp_dir)
                 output_dir = Path(tmp_dir) / "output"

@@ -4,20 +4,18 @@ This module tests the complete pipeline flow from YouTube URL input
 to final analysis output, ensuring all components work together.
 """
 
-import pytest
-import asyncio
-import tempfile
-import shutil
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
 import json
+import shutil
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock, patch
 
-from src.pipeline_orchestrator import PipelineOrchestrator, create_pipeline_orchestrator
-from src.schemas import YouTubeAnalysisRequest, PipelineOutput, SoccerClassification, PlayerAnalysis
-from src.youtube.video_downloader import YouTubeDownloader
-from src.youtube.audio_extractor import AudioExtractor
-from src.youtube.metadata_parser import YouTubeMetadataParser
+import pytest
+
 from src.classify.soccer_classifier import SoccerClassifier
+from src.pipeline_orchestrator import PipelineOrchestrator
+from src.schemas import PipelineOutput, PlayerAnalysis, SoccerClassification, YouTubeAnalysisRequest
+from src.youtube.metadata_parser import YouTubeMetadataParser
 
 
 class TestEndToEndPipeline:
@@ -128,7 +126,7 @@ class TestEndToEndPipeline:
             # Verify result structure
             assert isinstance(result, PipelineOutput)
             assert result.input_source == "youtube"
-            assert result.soccer_classification.is_soccer == True
+            assert result.soccer_classification.is_soccer
             assert result.soccer_classification.soccer_confidence > 0.8
             assert len(result.output_files) > 0
     
@@ -182,7 +180,7 @@ class TestEndToEndPipeline:
             }
             
             result = classifier.classify_youtube_content("https://youtube.com/watch?v=test")
-            assert result['is_soccer'] == True
+            assert result['is_soccer']
             assert result['confidence'] > 0.8
         
         # Invalid URL should raise error

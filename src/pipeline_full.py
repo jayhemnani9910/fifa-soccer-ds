@@ -17,7 +17,6 @@ import sys
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 try:  # pragma: no cover - optional dependency
     import cv2
@@ -29,17 +28,19 @@ from src.graph.build_graph import build_track_graph
 from src.track.bytetrack_runtime import ByteTrackRuntime, Tracklets
 from src.track.pipeline import filter_detections
 from src.utils.mlflow_helper import start_run
-from src.utils.overlay import draw_boxes, draw_track_ids
 from src.utils.monitoring import (
-    timed_processing, timed_detection, timed_tracking,
-    FRAMES_PROCESSED, DETECTIONS_MADE, TRACKS_CREATED,
-    update_system_metrics
+    DETECTIONS_MADE,
+    FRAMES_PROCESSED,
+    TRACKS_CREATED,
+    timed_processing,
+    update_system_metrics,
 )
+from src.utils.overlay import draw_boxes, draw_track_ids
 
 # Tactical analytics imports
 try:
-    from src.analytics.tactical import TacticalAnalyzer, TacticalConfig, PlayerState
-    from src.analytics.team_classifier import JerseyColorClassifier, TeamAssignment
+    from src.analytics.tactical import PlayerState, TacticalAnalyzer, TacticalConfig
+    from src.analytics.team_classifier import JerseyColorClassifier, TeamAssignment  # noqa: F401
     from src.calib.pitch_transform import PitchCoordinateTransformer
     TACTICAL_AVAILABLE = True
 except ImportError:
@@ -47,10 +48,10 @@ except ImportError:
 
 # YouTube integration imports
 try:
-    from src.youtube.video_downloader import YouTubeDownloader
-    from src.youtube.audio_extractor import AudioExtractor
-    from src.youtube.metadata_parser import YouTubeMetadataParser
     from src.classify.soccer_classifier import SoccerClassifier
+    from src.youtube.audio_extractor import AudioExtractor  # noqa: F401
+    from src.youtube.metadata_parser import YouTubeMetadataParser  # noqa: F401
+    from src.youtube.video_downloader import YouTubeDownloader
     YOUTUBE_AVAILABLE = True
 except ImportError:
     YOUTUBE_AVAILABLE = False
@@ -429,13 +430,12 @@ def process_frames_directory(
                 frame_id = tracklets.frame_id
 
                 # Get image shape for normalization
-                img_shape = (1080, 1920)  # Default
                 if frame_id < len(frame_files):
                     fp = frame_files[frame_id]
                     if cv2 is not None:
                         img = cv2.imread(fp.as_posix())
                         if img is not None:
-                            img_shape = (img.shape[0], img.shape[1])
+                            (img.shape[0], img.shape[1])
 
                 # Convert tracklets to player states
                 players = []
@@ -831,7 +831,7 @@ def _extract_frames_from_video(video_path: Path, output_dir: Path, max_frames: i
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video file: {video_path}")
         
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
         # Calculate frame interval for desired number of frames

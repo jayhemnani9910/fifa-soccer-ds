@@ -1,10 +1,15 @@
 """Test memory-optimized graph construction."""
 
-import pytest
-import torch
 from unittest.mock import Mock
 
-from src.graph.build_graph import build_track_graph, build_track_graph_optimized, estimate_graph_memory
+import pytest
+import torch
+
+from src.graph.build_graph import (
+    build_track_graph,
+    build_track_graph_optimized,
+    estimate_graph_memory,
+)
 
 
 class TestGraphMemory:

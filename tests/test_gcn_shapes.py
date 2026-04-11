@@ -2,9 +2,9 @@ import pytest
 import torch
 
 torch_geometric = pytest.importorskip("torch_geometric")
-from torch_geometric.data import Data  # noqa: E402
+from torch_geometric.data import Data
 
-from src.models.gcn import GraphSAGENet, forward_pass  # noqa: E402
+from src.models.gcn import GraphSAGENet, forward_pass
 
 
 def test_graphsage_forward_shape():

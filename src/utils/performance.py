@@ -5,11 +5,12 @@ from __future__ import annotations
 import gc
 import logging
 import time
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, Optional
+from typing import Any
 
 try:
     import cv2
@@ -28,8 +29,8 @@ class PerformanceMetrics:
     start_time: float
     end_time: float
     duration: float
-    memory_before: Optional[int] = None
-    memory_after: Optional[int] = None
+    memory_before: int | None = None
+    memory_after: int | None = None
     items_processed: int = 0
     
     @property
@@ -40,7 +41,7 @@ class PerformanceMetrics:
         return 0.0
     
     @property
-    def memory_delta(self) -> Optional[int]:
+    def memory_delta(self) -> int | None:
         """Calculate memory usage change."""
         if self.memory_before is not None and self.memory_after is not None:
             return self.memory_after - self.memory_before
@@ -139,7 +140,7 @@ class BatchProcessor:
         self, 
         items: list, 
         process_func: Callable[[list], Any],
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Callable[[int, int], None] | None = None
     ) -> list:
         """Process items in memory-efficient batches.
         
@@ -233,7 +234,7 @@ class VideoOptimizer:
         """
         frame_cache = {}
         
-        for i, path in enumerate(frame_paths[:max_preload]):
+        for _i, path in enumerate(frame_paths[:max_preload]):
             try:
                 frame = cv2.imread(str(path))
                 if frame is not None:

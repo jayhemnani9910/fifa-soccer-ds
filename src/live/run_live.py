@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - optional dependency
     cv2 = None
 
 from src.detect.infer import InferenceConfig, extract_detections, load_model
-from src.track.bytetrack_runtime import ByteTrackRuntime, Tracklets
+from src.track.bytetrack_runtime import ByteTrackRuntime
 from src.track.pipeline import filter_detections
 from src.utils.overlay import draw_boxes, draw_track_ids
 

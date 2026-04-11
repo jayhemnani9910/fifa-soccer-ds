@@ -9,16 +9,16 @@ Provides unified interface for tactical soccer analysis including:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from src.analytics._pitch_control import (
-    PitchControlModel,
     PitchControlConfig,
-    PlayerState,
+    PitchControlModel,
     PitchControlResult,
+    PlayerState,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ __all__ = [
 @dataclass(slots=True)
 class TacticalConfig:
     """Configuration for tactical analysis."""
-    grid_shape: Tuple[int, int] = (12, 16)  # (rows, cols)
+    grid_shape: tuple[int, int] = (12, 16)  # (rows, cols)
     max_speed: float = 5.0  # m/s
     reaction_time: float = 0.7  # seconds
     pitch_length: float = 105.0  # meters
@@ -51,8 +51,8 @@ class TacticalResult:
     """Complete tactical analysis result for a frame."""
     frame_id: int
     pitch_control: PitchControlResult
-    xT_grid: Optional[np.ndarray] = None
-    obso_grid: Optional[np.ndarray] = None
+    xT_grid: np.ndarray | None = None
+    obso_grid: np.ndarray | None = None
     home_obso_total: float = 0.0
     away_obso_total: float = 0.0
 
@@ -67,7 +67,7 @@ class TacticalAnalyzer:
         config: Configuration for tactical analysis.
     """
 
-    def __init__(self, config: Optional[TacticalConfig] = None) -> None:
+    def __init__(self, config: TacticalConfig | None = None) -> None:
         self.config = config or TacticalConfig()
 
         # Initialize pitch control model
@@ -136,7 +136,7 @@ class TacticalAnalyzer:
     def compute(
         self,
         frame_id: int,
-        players: Optional[List[PlayerState]] = None
+        players: list[PlayerState] | None = None
     ) -> TacticalResult:
         """Compute all tactical metrics for a frame.
 
@@ -154,7 +154,7 @@ class TacticalAnalyzer:
         if self.config.enable_obso:
             obso_home, obso_away, home_total, away_total = self._compute_obso(pc_result.grid)
         else:
-            obso_home = obso_away = None
+            obso_home = None
             home_total = away_total = 0.0
 
         return TacticalResult(
@@ -169,7 +169,7 @@ class TacticalAnalyzer:
     def _compute_obso(
         self,
         pitch_control_grid: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray, float, float]:
+    ) -> tuple[np.ndarray, np.ndarray, float, float]:
         """Compute Off-Ball Scoring Opportunities.
 
         OBSO = Pitch Control * xT
@@ -192,9 +192,9 @@ class TacticalAnalyzer:
     def compute_from_tracklets(
         self,
         frame_id: int,
-        tracklets_data: List[Dict[str, Any]],
-        team_assignments: Optional[Dict[int, int]] = None,
-        image_shape: Optional[Tuple[int, int]] = None
+        tracklets_data: list[dict[str, Any]],
+        team_assignments: dict[int, int] | None = None,
+        image_shape: tuple[int, int] | None = None
     ) -> TacticalResult:
         """Compute tactical metrics from tracklet data.
 
@@ -250,7 +250,7 @@ class TacticalAnalyzer:
 
         return self.compute(frame_id, players)
 
-    def to_dict(self, result: TacticalResult) -> Dict[str, Any]:
+    def to_dict(self, result: TacticalResult) -> dict[str, Any]:
         """Convert TacticalResult to JSON-serializable dict."""
         return {
             "frame_id": result.frame_id,
@@ -271,8 +271,8 @@ class TacticalAnalyzer:
 
     def get_aggregate_stats(
         self,
-        results: List[TacticalResult]
-    ) -> Dict[str, Any]:
+        results: list[TacticalResult]
+    ) -> dict[str, Any]:
         """Compute aggregate statistics across multiple frames.
 
         Args:

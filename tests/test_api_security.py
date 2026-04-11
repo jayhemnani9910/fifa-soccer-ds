@@ -7,6 +7,7 @@ These tests verify that the FastAPI security configurations work correctly:
 """
 
 import os
+
 import pytest
 
 
@@ -46,6 +47,7 @@ class TestCORSConfiguration:
 
             # Re-import to pick up the environment variable
             import importlib
+
             import src.api.main
             importlib.reload(src.api.main)
 
@@ -63,17 +65,18 @@ class TestCORSConfiguration:
 
             # Reload again to restore original state
             import importlib
+
             import src.api.main
             importlib.reload(src.api.main)
 
     def test_cors_middleware_is_configured(self):
         """Test that CORS middleware is configured on the app."""
+
         from src.api.main import app
-        from starlette.middleware.cors import CORSMiddleware
 
         # Check middleware stack for CORS
-        middleware_classes = [type(m) for m in app.user_middleware]
-        middleware_names = [m.__class__.__name__ for m in app.user_middleware]
+        [type(m) for m in app.user_middleware]
+        [m.__class__.__name__ for m in app.user_middleware]
 
         # The app should have middleware configured
         assert len(app.user_middleware) > 0
@@ -84,7 +87,7 @@ class TestRateLimiting:
 
     def test_rate_limit_configuration_is_restrictive(self):
         """Test that rate limit is appropriately restrictive."""
-        from src.api.main import limiter, app
+        from src.api.main import app, limiter
 
         # Verify limiter is attached to app
         assert hasattr(app.state, 'limiter')
@@ -92,16 +95,18 @@ class TestRateLimiting:
 
     def test_api_has_rate_limit_handler(self):
         """Test that API has rate limit exceeded handler registered."""
-        from src.api.main import app
         from slowapi.errors import RateLimitExceeded
+
+        from src.api.main import app
 
         # Verify the exception handler is registered
         assert RateLimitExceeded in app.exception_handlers
 
     def test_limiter_uses_client_ip(self):
         """Test that limiter is configured to use client IP."""
-        from src.api.main import limiter
         from slowapi.util import get_remote_address
+
+        from src.api.main import limiter
 
         # Limiter should use get_remote_address for key function
         assert limiter._key_func == get_remote_address
@@ -127,8 +132,9 @@ class TestSecurityConfiguration:
 
     def test_app_has_exception_handlers(self):
         """Test that app has exception handlers configured."""
-        from src.api.main import app
         from fastapi import HTTPException
+
+        from src.api.main import app
 
         # Should have custom exception handlers
         assert HTTPException in app.exception_handlers

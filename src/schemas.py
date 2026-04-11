@@ -7,11 +7,11 @@ to ensure data integrity across the entire pipeline.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, validator, HttpUrl
-from typing import List, Optional, Dict, Any, Literal, Union
-from datetime import datetime
-from pathlib import Path
 import re
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, HttpUrl, validator
 
 
 class DetectionBox(BaseModel):
@@ -47,9 +47,9 @@ class PlayerTrack(BaseModel):
     confidence: float = Field(ge=0, le=1, description="Detection confidence")
     
     # Optional tracking features
-    velocity_x: Optional[float] = Field(default=None, description="X velocity")
-    velocity_y: Optional[float] = Field(default=None, description="Y velocity")
-    appearance_features: Optional[List[float]] = Field(default=None, description="Appearance embeddings")
+    velocity_x: float | None = Field(default=None, description="X velocity")
+    velocity_y: float | None = Field(default=None, description="Y velocity")
+    appearance_features: list[float] | None = Field(default=None, description="Appearance embeddings")
 
 
 class SoccerEvent(BaseModel):
@@ -58,12 +58,12 @@ class SoccerEvent(BaseModel):
     timestamp: float = Field(ge=0, description="Event timestamp in seconds")
     event_type: Literal["goal", "foul", "card", "substitution", "corner", "free_kick", "offside", "penalty"]
     confidence: float = Field(ge=0, le=1, description="Event detection confidence")
-    description: Optional[str] = Field(default=None, description="Event description")
+    description: str | None = Field(default=None, description="Event description")
     
     # Event details
-    players_involved: Optional[List[int]] = Field(default=None, description="Track IDs of involved players")
-    location: Optional[DetectionBox] = Field(default=None, description="Event location")
-    team: Optional[str] = Field(default=None, description="Team involved")
+    players_involved: list[int] | None = Field(default=None, description="Track IDs of involved players")
+    location: DetectionBox | None = Field(default=None, description="Event location")
+    team: str | None = Field(default=None, description="Team involved")
 
 
 class VideoMetadata(BaseModel):
@@ -80,12 +80,12 @@ class VideoMetadata(BaseModel):
     
     # Engagement metrics
     view_count: int = Field(ge=0, description="View count")
-    like_count: Optional[int] = Field(default=None, ge=0, description="Like count")
-    comment_count: Optional[int] = Field(default=None, ge=0, description="Comment count")
+    like_count: int | None = Field(default=None, ge=0, description="Like count")
+    comment_count: int | None = Field(default=None, ge=0, description="Comment count")
     
     # Content info
-    tags: List[str] = Field(default_factory=list, description="Video tags")
-    categories: List[str] = Field(default_factory=list, description="Content categories")
+    tags: list[str] = Field(default_factory=list, description="Video tags")
+    categories: list[str] = Field(default_factory=list, description="Content categories")
     publish_date: datetime = Field(description="Publication date")
     
     # Quality metrics
@@ -103,11 +103,11 @@ class AudioTranscription(BaseModel):
     confidence: float = Field(ge=0, le=1, description="Transcription confidence")
     
     # Timing information
-    segments: List[Dict[str, Any]] = Field(default_factory=list, description="Timestamped segments")
+    segments: list[dict[str, Any]] = Field(default_factory=list, description="Timestamped segments")
     duration_seconds: float = Field(gt=0, description="Audio duration")
     
     # Soccer-related content
-    soccer_keywords_found: List[str] = Field(default_factory=list, description="Soccer terms detected")
+    soccer_keywords_found: list[str] = Field(default_factory=list, description="Soccer terms detected")
     commentary_confidence: float = Field(ge=0, le=1, description="Sports commentary confidence")
 
 
@@ -115,15 +115,15 @@ class PlayerAnalysis(BaseModel):
     """Validation schema for player tracking and analysis."""
     
     total_players_detected: int = Field(ge=0, description="Number of unique players")
-    player_tracks: List[PlayerTrack] = Field(default_factory=list, description="Individual player tracks")
+    player_tracks: list[PlayerTrack] = Field(default_factory=list, description="Individual player tracks")
     
     # Team analysis
     teams_detected: int = Field(ge=0, le=2, description="Number of teams identified")
-    team_colors: List[str] = Field(default_factory=list, description="Detected team colors")
+    team_colors: list[str] = Field(default_factory=list, description="Detected team colors")
     
     # Performance metrics
     avg_track_length: float = Field(ge=0, description="Average track duration")
-    player_positions: Dict[str, List[tuple]] = Field(default_factory=dict, description="Player position history")
+    player_positions: dict[str, list[tuple]] = Field(default_factory=dict, description="Player position history")
 
 
 class SoccerClassification(BaseModel):
@@ -134,10 +134,10 @@ class SoccerClassification(BaseModel):
     
     # Content analysis
     content_type: Literal["match", "highlight", "training", "interview", "analysis", "other"]
-    match_phase: Optional[Literal["pre_match", "first_half", "half_time", "second_half", "full_time"]] = Field(default=None)
+    match_phase: Literal["pre_match", "first_half", "half_time", "second_half", "full_time"] | None = Field(default=None)
     
     # Event statistics
-    events_detected: List[SoccerEvent] = Field(default_factory=list, description="Detected events")
+    events_detected: list[SoccerEvent] = Field(default_factory=list, description="Detected events")
     total_events: int = Field(ge=0, description="Total number of events")
     
     # Quality metrics
@@ -155,32 +155,32 @@ class PipelineOutput(BaseModel):
     
     # Input information
     input_source: Literal["youtube", "frame_directory", "video_file"]
-    input_url: Optional[HttpUrl] = Field(default=None, description="Input source URL")
+    input_url: HttpUrl | None = Field(default=None, description="Input source URL")
     input_metadata: VideoMetadata = Field(description="Input video metadata")
     
     # Analysis results
     soccer_classification: SoccerClassification = Field(description="Soccer content classification")
     player_analysis: PlayerAnalysis = Field(description="Player tracking results")
-    audio_analysis: Optional[AudioTranscription] = Field(default=None, description="Audio transcription")
+    audio_analysis: AudioTranscription | None = Field(default=None, description="Audio transcription")
     
     # Output files
-    output_files: Dict[str, str] = Field(default_factory=dict, description="Generated output files")
-    summary_report: Optional[str] = Field(default=None, description="Summary report path")
+    output_files: dict[str, str] = Field(default_factory=dict, description="Generated output files")
+    summary_report: str | None = Field(default=None, description="Summary report path")
     
     # Error information (if any)
-    errors: List[str] = Field(default_factory=list, description="Processing errors")
-    warnings: List[str] = Field(default_factory=list, description="Processing warnings")
+    errors: list[str] = Field(default_factory=list, description="Processing errors")
+    warnings: list[str] = Field(default_factory=list, description="Processing warnings")
 
 
 class YouTubeAnalysisRequest(BaseModel):
     """Validation schema for YouTube analysis API requests."""
     
     url: HttpUrl = Field(description="YouTube video URL")
-    output_dir: Optional[str] = Field(default=None, description="Output directory")
+    output_dir: str | None = Field(default=None, description="Output directory")
     
     # Processing options
     frame_rate: float = Field(default=1.0, gt=0, le=30, description="Frame extraction rate")
-    max_duration: Optional[int] = Field(default=None, gt=0, le=7200, description="Max processing duration")
+    max_duration: int | None = Field(default=None, gt=0, le=7200, description="Max processing duration")
     include_audio: bool = Field(default=True, description="Include audio analysis")
     confidence_threshold: float = Field(default=0.75, ge=0, le=1, description="Detection confidence threshold")
     
@@ -203,7 +203,7 @@ class TaskStatus(BaseModel):
     
     task_id: str = Field(min_length=1, description="Unique task identifier")
     status: Literal["pending", "processing", "completed", "error", "cancelled"]
-    message: Optional[str] = Field(default=None, description="Status message")
+    message: str | None = Field(default=None, description="Status message")
     progress: float = Field(ge=0, le=1, description="Progress percentage")
     
     # Timing information
@@ -211,23 +211,23 @@ class TaskStatus(BaseModel):
     updated_at: datetime = Field(description="Last update time")
     
     # Results (when completed)
-    results: Optional[PipelineOutput] = Field(default=None, description="Analysis results")
-    error_details: Optional[str] = Field(default=None, description="Error details if failed")
+    results: PipelineOutput | None = Field(default=None, description="Analysis results")
+    error_details: str | None = Field(default=None, description="Error details if failed")
 
 
 # Configuration validation schemas
 class PipelineConfig(BaseModel):
     """Validation schema for pipeline configuration."""
     
-    pipeline: Dict[str, Any] = Field(description="Pipeline settings")
-    youtube: Dict[str, Any] = Field(description="YouTube settings")
-    audio: Dict[str, Any] = Field(description="Audio processing settings")
-    soccer_analysis: Dict[str, Any] = Field(description="Soccer analysis settings")
-    output: Dict[str, Any] = Field(description="Output settings")
-    error_handling: Dict[str, Any] = Field(description="Error handling settings")
-    monitoring: Dict[str, Any] = Field(description="Monitoring settings")
-    api: Dict[str, Any] = Field(description="API settings")
-    validation: Dict[str, Any] = Field(description="Validation settings")
+    pipeline: dict[str, Any] = Field(description="Pipeline settings")
+    youtube: dict[str, Any] = Field(description="YouTube settings")
+    audio: dict[str, Any] = Field(description="Audio processing settings")
+    soccer_analysis: dict[str, Any] = Field(description="Soccer analysis settings")
+    output: dict[str, Any] = Field(description="Output settings")
+    error_handling: dict[str, Any] = Field(description="Error handling settings")
+    monitoring: dict[str, Any] = Field(description="Monitoring settings")
+    api: dict[str, Any] = Field(description="API settings")
+    validation: dict[str, Any] = Field(description="Validation settings")
 
 
 # Utility functions for schema validation
@@ -255,7 +255,7 @@ def validate_video_duration(duration_seconds: int, max_duration: int = 28800) ->
     return 1 <= duration_seconds <= max_duration
 
 
-def validate_video_codec(codec: str, supported_codecs: List[str] = None) -> bool:
+def validate_video_codec(codec: str, supported_codecs: list[str] = None) -> bool:
     """Validate video codec is supported.
     
     Args:
@@ -274,7 +274,7 @@ def validate_video_codec(codec: str, supported_codecs: List[str] = None) -> bool
     return any(supported in codec_lower for supported in supported_codecs)
 
 
-def validate_audio_codec(codec: str, supported_codecs: List[str] = None) -> bool:
+def validate_audio_codec(codec: str, supported_codecs: list[str] = None) -> bool:
     """Validate audio codec is supported.
     
     Args:
@@ -329,7 +329,7 @@ def validate_resolution(resolution: str, min_width: int = 320, min_height: int =
         return False
 
 
-def validate_video_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+def validate_video_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Comprehensive video metadata validation.
     
     Args:

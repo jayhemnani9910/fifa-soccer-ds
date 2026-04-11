@@ -1,9 +1,9 @@
 """Test performance optimization scenarios."""
 
-import time
 import tempfile
+import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -132,7 +132,7 @@ class TestResourceOptimization:
             for i in range(3):
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
             
-            summary = process_frames_directory(
+            process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
                 config=PipelineConfig(max_frames=3),
@@ -147,7 +147,7 @@ class TestResourceOptimization:
 
     def test_file_io_error_handling(self):
         """Test graceful handling of file I/O errors."""
-        with patch('builtins.open', side_effect=IOError("Disk full")):
+        with patch('builtins.open', side_effect=OSError("Disk full")):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 frames_dir = Path(tmp_dir)
                 output_dir = Path(tmp_dir) / "output"

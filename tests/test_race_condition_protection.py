@@ -7,18 +7,15 @@ and atomic file operations to prevent concurrent access issues.
 """
 
 import json
-import pytest
 import tempfile
 import threading
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
-from src.train.weekly_retrainer import (
-    RetrainingLock, 
-    AtomicFileWriter,
-    _increment_version_safe
-)
+import pytest
+
+from src.train.weekly_retrainer import AtomicFileWriter, RetrainingLock, _increment_version_safe
 
 
 class TestRetrainingLock:
@@ -94,7 +91,7 @@ class TestRetrainingLock:
         
         def worker(worker_id):
             try:
-                with RetrainingLock(self.lock_file, timeout=2.0) as lock:
+                with RetrainingLock(self.lock_file, timeout=2.0):
                     results.append(f"worker_{worker_id}_acquired")
                     time.sleep(0.1)  # Simulate work
                     results.append(f"worker_{worker_id}_released")

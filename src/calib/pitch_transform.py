@@ -10,7 +10,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import Literal
 
 import numpy as np
 
@@ -48,7 +48,7 @@ class PitchCoordinateTransformer:
     def __init__(
         self,
         mode: Literal["manual", "auto", "identity"] = "identity",
-        image_shape: Optional[Tuple[int, int]] = None,
+        image_shape: tuple[int, int] | None = None,
         pitch_length: float = PITCH_LENGTH,
         pitch_width: float = PITCH_WIDTH
     ) -> None:
@@ -57,8 +57,8 @@ class PitchCoordinateTransformer:
         self.pitch_length = pitch_length
         self.pitch_width = pitch_width
 
-        self._homography_matrix: Optional[np.ndarray] = None
-        self._inverse_matrix: Optional[np.ndarray] = None
+        self._homography_matrix: np.ndarray | None = None
+        self._inverse_matrix: np.ndarray | None = None
 
         if mode == "identity":
             LOGGER.warning(
@@ -70,10 +70,10 @@ class PitchCoordinateTransformer:
     def from_homography_matrix(
         cls,
         matrix: np.ndarray,
-        image_shape: Tuple[int, int],
+        image_shape: tuple[int, int],
         pitch_length: float = PITCH_LENGTH,
         pitch_width: float = PITCH_WIDTH
-    ) -> "PitchCoordinateTransformer":
+    ) -> PitchCoordinateTransformer:
         """Create transformer from a 3x3 homography matrix.
 
         Args:
@@ -98,12 +98,12 @@ class PitchCoordinateTransformer:
     @classmethod
     def from_keypoints(
         cls,
-        image_points: List[Tuple[float, float]],
-        world_points: List[Tuple[float, float]],
-        image_shape: Tuple[int, int],
+        image_points: list[tuple[float, float]],
+        world_points: list[tuple[float, float]],
+        image_shape: tuple[int, int],
         pitch_length: float = PITCH_LENGTH,
         pitch_width: float = PITCH_WIDTH
-    ) -> "PitchCoordinateTransformer":
+    ) -> PitchCoordinateTransformer:
         """Create transformer from corresponding keypoint pairs.
 
         Requires at least 4 point correspondences.
@@ -143,7 +143,7 @@ class PitchCoordinateTransformer:
         )
 
     @classmethod
-    def from_saved_calibration(cls, path: Path) -> "PitchCoordinateTransformer":
+    def from_saved_calibration(cls, path: Path) -> PitchCoordinateTransformer:
         """Load transformer from saved calibration file.
 
         Args:
@@ -194,7 +194,7 @@ class PitchCoordinateTransformer:
 
     def pixel_to_pitch(
         self,
-        pixel_point: Tuple[float, float]
+        pixel_point: tuple[float, float]
     ) -> PitchCoordinates:
         """Convert pixel coordinates to pitch coordinates.
 
@@ -237,9 +237,9 @@ class PitchCoordinateTransformer:
 
     def pitch_to_pixel(
         self,
-        pitch_point: Tuple[float, float],
+        pitch_point: tuple[float, float],
         use_meters: bool = False
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """Convert pitch coordinates to pixel coordinates.
 
         Args:
@@ -271,7 +271,7 @@ class PitchCoordinateTransformer:
 
     def bbox_to_pitch_position(
         self,
-        bbox: List[float],
+        bbox: list[float],
         use_foot_point: bool = True
     ) -> np.ndarray:
         """Convert bounding box to pitch position.
@@ -299,8 +299,8 @@ class PitchCoordinateTransformer:
 
     def compute_velocity(
         self,
-        positions: List[np.ndarray],
-        frame_ids: List[int],
+        positions: list[np.ndarray],
+        frame_ids: list[int],
         fps: float = 30.0
     ) -> np.ndarray:
         """Compute velocity from position history.

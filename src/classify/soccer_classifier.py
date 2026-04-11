@@ -9,12 +9,12 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Any
 
-from src.youtube.video_downloader import YouTubeDownloader, extract_youtube_thumbnail
+from src.schemas import validate_youtube_url
 from src.youtube.audio_extractor import AudioExtractor
 from src.youtube.metadata_parser import YouTubeMetadataParser
-from src.schemas import SoccerClassification, YouTubeAnalysisRequest, validate_youtube_url
+from src.youtube.video_downloader import YouTubeDownloader, extract_youtube_thumbnail
 
 try:
     from PIL import Image
@@ -61,7 +61,7 @@ class SoccerClassifier:
         LOGGER.info("Soccer classifier initialized with threshold: %.2f", confidence_threshold)
     
     def classify_youtube_content(self, youtube_url: str, 
-                               sample_duration: float = 60.0) -> Dict[str, Any]:
+                               sample_duration: float = 60.0) -> dict[str, Any]:
         """Classify YouTube content using multi-modal analysis.
         
         Args:
@@ -141,7 +141,7 @@ class SoccerClassifier:
             LOGGER.error("Classification failed for %s: %s", youtube_url, e)
             raise RuntimeError(f"Classification failed: {e}") from e
     
-    def _analyze_thumbnail(self, youtube_url: str) -> Dict[str, Any]:
+    def _analyze_thumbnail(self, youtube_url: str) -> dict[str, Any]:
         """Analyze video thumbnail for soccer elements.
         
         Args:
@@ -192,7 +192,7 @@ class SoccerClassifier:
                 'error': str(e),
             }
     
-    def _analyze_image_for_soccer(self, image_array) -> Dict[str, Any]:
+    def _analyze_image_for_soccer(self, image_array) -> dict[str, Any]:
         """Analyze image for soccer-related visual elements.
         
         Args:
@@ -276,7 +276,7 @@ class SoccerClassifier:
             LOGGER.warning("Advanced image analysis failed: %s", e)
             return self._basic_image_analysis(image_array)
     
-    def _basic_image_analysis(self, image_array) -> Dict[str, Any]:
+    def _basic_image_analysis(self, image_array) -> dict[str, Any]:
         """Basic image analysis without OpenCV dependencies.
         
         Args:
@@ -330,7 +330,7 @@ class SoccerClassifier:
                 'error': str(e),
             }
     
-    def _analyze_audio_sample(self, youtube_url: str, duration: float) -> Dict[str, Any]:
+    def _analyze_audio_sample(self, youtube_url: str, duration: float) -> dict[str, Any]:
         """Analyze audio sample for soccer content.
         
         Args:
@@ -370,9 +370,9 @@ class SoccerClassifier:
                 },
             }
     
-    def _combine_classifications(self, metadata_result: Dict[str, Any],
-                               thumbnail_result: Dict[str, Any],
-                               audio_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _combine_classifications(self, metadata_result: dict[str, Any],
+                               thumbnail_result: dict[str, Any],
+                               audio_result: dict[str, Any] | None) -> dict[str, Any]:
         """Combine results from different classification methods.
         
         Args:
@@ -432,7 +432,7 @@ class SoccerClassifier:
             'weights_used': weights,
         }
     
-    def quick_classify(self, youtube_url: str) -> Dict[str, Any]:
+    def quick_classify(self, youtube_url: str) -> dict[str, Any]:
         """Quick classification using only metadata and thumbnail.
         
         Args:
@@ -490,7 +490,7 @@ class SoccerClassifier:
 
 # Convenience functions
 def classify_youtube_soccer_content(youtube_url: str, 
-                                  confidence_threshold: float = 0.75) -> Dict[str, Any]:
+                                  confidence_threshold: float = 0.75) -> dict[str, Any]:
     """Classify if YouTube content is soccer-related.
     
     Args:
@@ -504,7 +504,7 @@ def classify_youtube_soccer_content(youtube_url: str,
     return classifier.classify_youtube_content(youtube_url)
 
 
-def quick_soccer_classify(youtube_url: str) -> Dict[str, Any]:
+def quick_soccer_classify(youtube_url: str) -> dict[str, Any]:
     """Quick soccer classification using metadata and thumbnail only.
     
     Args:

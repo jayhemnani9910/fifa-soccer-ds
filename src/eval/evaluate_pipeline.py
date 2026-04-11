@@ -14,9 +14,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-import numpy as np
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +80,7 @@ class PipelineMetrics:
     fps: float = 0.0
     memory_usage_mb: float = 0.0
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "detection": {
@@ -118,23 +116,23 @@ class PipelineEvaluator:
         self.detection_metrics = DetectionMetrics()
         self.tracking_metrics = TrackingMetrics()
         
-    def load_results(self, results_path: Path) -> List[Dict[str, Any]]:
+    def load_results(self, results_path: Path) -> list[dict[str, Any]]:
         """Load tracking results from pipeline."""
         if not results_path.exists():
             raise FileNotFoundError(f"Results file not found: {results_path}")
         
-        with open(results_path, 'r') as f:
+        with open(results_path) as f:
             return json.load(f)
     
-    def load_ground_truth(self, gt_path: Path) -> List[Dict[str, Any]]:
+    def load_ground_truth(self, gt_path: Path) -> list[dict[str, Any]]:
         """Load ground truth annotations."""
         if not gt_path.exists():
             raise FileNotFoundError(f"Ground truth file not found: {gt_path}")
         
-        with open(gt_path, 'r') as f:
+        with open(gt_path) as f:
             return json.load(f)
     
-    def calculate_iou(self, box1: List[float], box2: List[float]) -> float:
+    def calculate_iou(self, box1: list[float], box2: list[float]) -> float:
         """Calculate Intersection over Union for two bounding boxes."""
         x1 = max(box1[0], box2[0])
         y1 = max(box1[1], box2[1])
@@ -153,8 +151,8 @@ class PipelineEvaluator:
     
     def evaluate_detections(
         self, 
-        results: List[Dict[str, Any]], 
-        ground_truth: List[Dict[str, Any]]
+        results: list[dict[str, Any]], 
+        ground_truth: list[dict[str, Any]]
     ) -> DetectionMetrics:
         """Evaluate detection performance."""
         metrics = DetectionMetrics()
@@ -180,7 +178,7 @@ class PipelineEvaluator:
                 best_iou = 0.0
                 best_gt_idx = -1
                 
-                for i, gt in enumerate(gt_detections):
+                for i, _gt in enumerate(gt_detections):
                     if i in matched_gt:
                         continue
                     
@@ -198,7 +196,7 @@ class PipelineEvaluator:
                     metrics.false_positives += 1
             
             # Count false negatives
-            for i, gt in enumerate(gt_detections):
+            for i, _gt in enumerate(gt_detections):
                 if i not in matched_gt:
                     metrics.false_negatives += 1
         
@@ -206,8 +204,8 @@ class PipelineEvaluator:
     
     def evaluate_tracking(
         self, 
-        results: List[Dict[str, Any]], 
-        ground_truth: List[Dict[str, Any]]
+        results: list[dict[str, Any]], 
+        ground_truth: list[dict[str, Any]]
     ) -> TrackingMetrics:
         """Evaluate tracking performance."""
         metrics = TrackingMetrics()
@@ -228,7 +226,7 @@ class PipelineEvaluator:
                 })
         
         # Analyze track continuity
-        for track_id, track_data in tracks_by_id.items():
+        for _track_id, track_data in tracks_by_id.items():
             if len(track_data) < 2:
                 continue
             
@@ -266,7 +264,7 @@ class PipelineEvaluator:
         self, 
         results_path: Path, 
         ground_truth_path: Path,
-        timing_data: Optional[Dict[str, float]] = None
+        timing_data: dict[str, float] | None = None
     ) -> PipelineMetrics:
         """Evaluate complete pipeline performance."""
         
@@ -295,7 +293,7 @@ class PipelineEvaluator:
             memory_usage_mb=memory_usage
         )
         
-        log.info(f"Pipeline evaluation completed:")
+        log.info("Pipeline evaluation completed:")
         log.info(f"  Detection - Precision: {detection_metrics.precision:.3f}, Recall: {detection_metrics.recall:.3f}, F1: {detection_metrics.f1_score:.3f}")
         log.info(f"  Tracking - MOTA: {tracking_metrics.mota:.3f}, ID Switches: {tracking_metrics.id_switches}")
         log.info(f"  Performance - FPS: {fps:.1f}, Time: {total_time:.1f}s, Memory: {memory_usage:.1f}MB")
@@ -320,19 +318,19 @@ class PipelineEvaluator:
         with open(report_path, 'w') as f:
             f.write("FIFA Soccer Analytics Pipeline Evaluation Report\n")
             f.write("=" * 50 + "\n\n")
-            f.write(f"Detection Performance:\n")
+            f.write("Detection Performance:\n")
             f.write(f"  Precision: {metrics.detection.precision:.3f}\n")
             f.write(f"  Recall: {metrics.detection.recall:.3f}\n")
             f.write(f"  F1 Score: {metrics.detection.f1_score:.3f}\n")
             f.write(f"  True Positives: {metrics.detection.true_positives}\n")
             f.write(f"  False Positives: {metrics.detection.false_positives}\n")
             f.write(f"  False Negatives: {metrics.detection.false_negatives}\n\n")
-            f.write(f"Tracking Performance:\n")
+            f.write("Tracking Performance:\n")
             f.write(f"  MOTA: {metrics.tracking.mota:.3f}\n")
             f.write(f"  MOTP: {metrics.tracking.motp:.3f}\n")
             f.write(f"  ID Switches: {metrics.tracking.id_switches}\n")
             f.write(f"  Fragmentations: {metrics.tracking.fragmentations}\n\n")
-            f.write(f"Pipeline Performance:\n")
+            f.write("Pipeline Performance:\n")
             f.write(f"  FPS: {metrics.fps:.1f}\n")
             f.write(f"  Total Time: {metrics.total_time:.1f}s\n")
             f.write(f"  Memory Usage: {metrics.memory_usage_mb:.1f}MB\n")

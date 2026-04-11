@@ -3,15 +3,14 @@ FastAPI endpoints for YouTube video processing and analysis.
 Provides REST API for the Smart YouTube Analyzer functionality.
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel, HttpUrl
-from typing import Optional, List, Dict, Any
-import os
-import json
-import asyncio
-from pathlib import Path
 import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, HttpUrl
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -28,19 +27,19 @@ app = FastAPI(
 class YouTubeAnalysisRequest(BaseModel):
     """Request model for YouTube video analysis."""
     url: HttpUrl
-    output_dir: Optional[str] = None
-    frame_rate: Optional[int] = 1  # Extract 1 frame per second by default
-    max_duration: Optional[int] = None  # Maximum duration to process (seconds)
-    include_audio: Optional[bool] = True
-    confidence_threshold: Optional[float] = 0.75
+    output_dir: str | None = None
+    frame_rate: int | None = 1  # Extract 1 frame per second by default
+    max_duration: int | None = None  # Maximum duration to process (seconds)
+    include_audio: bool | None = True
+    confidence_threshold: float | None = 0.75
 
 class AnalysisStatusResponse(BaseModel):
     """Response model for analysis status."""
     task_id: str
     status: str  # 'pending', 'processing', 'completed', 'error'
-    message: Optional[str] = None
-    progress: Optional[float] = None
-    results_url: Optional[str] = None
+    message: str | None = None
+    progress: float | None = None
+    results_url: str | None = None
 
 class YouTubeMetadataResponse(BaseModel):
     """Response model for YouTube video metadata."""
@@ -48,20 +47,20 @@ class YouTubeMetadataResponse(BaseModel):
     description: str
     duration: int
     view_count: int
-    like_count: Optional[int]
+    like_count: int | None
     channel_title: str
     publish_date: str
-    tags: List[str]
+    tags: list[str]
     thumbnail_url: str
 
 class AnalysisResultResponse(BaseModel):
     """Response model for analysis results."""
     task_id: str
     video_info: YouTubeMetadataResponse
-    analysis_summary: Dict[str, Any]
-    events_detected: List[Dict[str, Any]]
-    player_analysis: Dict[str, Any]
-    visualizations: List[str]
+    analysis_summary: dict[str, Any]
+    events_detected: list[dict[str, Any]]
+    player_analysis: dict[str, Any]
+    visualizations: list[str]
     output_directory: str
 
 # In-memory storage for task status (use Redis/database in production)
@@ -183,7 +182,7 @@ async def get_youtube_metadata(video_id: str):
     try:
         # Import with fallback for missing dependencies
         try:
-            from ..youtube.metadata_parser import YouTubeMetadataParser
+            from src.youtube.metadata_parser import YouTubeMetadataParser
         except ImportError:
             raise HTTPException(status_code=503, detail="YouTube dependencies not installed")
         
@@ -233,7 +232,7 @@ async def download_results(task_id: str):
         # Create ZIP file from results directory
         import zipfile
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(output_dir):
+            for root, _dirs, files in os.walk(output_dir):
                 for file in files:
                     if file != "results.zip":
                         file_path = os.path.join(root, file)
@@ -297,7 +296,7 @@ async def process_youtube_video_async(task_id: str, request: YouTubeAnalysisRequ
         
         # Import pipeline functions with fallback
         try:
-            from ..pipeline_full import process_youtube_video
+            from src.pipeline_full import process_youtube_video
         except ImportError:
             # Fallback: implement basic YouTube processing here
             task_status[task_id]["status"] = "error"
@@ -336,7 +335,7 @@ async def process_youtube_video_async(task_id: str, request: YouTubeAnalysisRequ
         task_status[task_id]["status"] = "error"
         task_status[task_id]["message"] = f"Analysis failed: {str(e)}"
 
-def format_analysis_results(results: Dict[str, Any], task_id: str, output_dir: str) -> AnalysisResultResponse:
+def format_analysis_results(results: dict[str, Any], task_id: str, output_dir: str) -> AnalysisResultResponse:
     """
     Format analysis results for API response.
     

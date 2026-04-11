@@ -7,9 +7,7 @@ import json
 import logging
 import os
 import re
-import signal
 import subprocess
-import tempfile
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -37,20 +35,20 @@ class SemanticVersion:
     def __str__(self) -> str:
         return f"{self.major}.{self.minor}.{self.patch}"
     
-    def increment_patch(self) -> "SemanticVersion":
+    def increment_patch(self) -> SemanticVersion:
         """Increment patch version (bug fixes)."""
         return SemanticVersion(self.major, self.minor, self.patch + 1)
     
-    def increment_minor(self) -> "SemanticVersion":
+    def increment_minor(self) -> SemanticVersion:
         """Increment minor version (new features)."""
         return SemanticVersion(self.major, self.minor + 1, 0)
     
-    def increment_major(self) -> "SemanticVersion":
+    def increment_major(self) -> SemanticVersion:
         """Increment major version (breaking changes)."""
         return SemanticVersion(self.major + 1, 0, 0)
     
     @classmethod
-    def from_string(cls, version_str: str) -> "SemanticVersion":
+    def from_string(cls, version_str: str) -> SemanticVersion:
         """Parse version string like '1.2.3'."""
         match = re.match(r'^(\d+)\.(\d+)\.(\d+)$', version_str.strip())
         if not match:
@@ -303,7 +301,7 @@ class RetrainingLock:
                 self.lock_fd.close()
                 self.lock_file.unlink(missing_ok=True)
                 LOGGER.info(f"Released retraining lock: {self.lock_file}")
-            except (OSError, IOError) as e:
+            except OSError as e:
                 LOGGER.error(f"Error releasing lock: {e}")
                 
     def _is_stale_lock(self) -> bool:
@@ -358,7 +356,7 @@ def checkpoint_lock(checkpoint_dir: Path):
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
             lock_fd.close()
             lock_file.unlink(missing_ok=True)
-        except (OSError, IOError):
+        except OSError:
             pass
 
 
@@ -404,7 +402,7 @@ def _current_git_commit() -> str:
 def _increment_version_safe(version_file: Path) -> int:
     """Thread-safe version increment with file locking."""
     try:
-        with open(version_file, 'r') as f:
+        with open(version_file) as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_SH)
             try:
                 if version_file.stat().st_size > 0:

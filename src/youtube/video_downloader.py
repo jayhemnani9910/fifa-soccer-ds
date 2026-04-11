@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 try:
     import yt_dlp
@@ -24,7 +23,7 @@ LOGGER = logging.getLogger(__name__)
 class YouTubeDownloader:
     """YouTube video downloader with soccer-optimized settings."""
     
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Path | None = None):
         """Initialize the YouTube downloader.
         
         Args:
@@ -58,7 +57,7 @@ class YouTubeDownloader:
             'nocheckcertificate': skip_ssl,
         }
     
-    def download_video(self, youtube_url: str) -> Dict[str, Any]:
+    def download_video(self, youtube_url: str) -> dict[str, Any]:
         """Download a YouTube video.
         
         Args:
@@ -116,7 +115,7 @@ class YouTubeDownloader:
             LOGGER.error("Failed to download video %s: %s", youtube_url, e)
             raise RuntimeError(f"Video download failed: {e}") from e
     
-    def get_video_info(self, youtube_url: str) -> Dict[str, Any]:
+    def get_video_info(self, youtube_url: str) -> dict[str, Any]:
         """Get video information without downloading.
         
         Args:
@@ -155,7 +154,7 @@ class YouTubeDownloader:
             LOGGER.error("Failed to get video info for %s: %s", youtube_url, e)
             raise RuntimeError(f"Failed to get video info: {e}") from e
     
-    def extract_thumbnail(self, youtube_url: str, output_path: Optional[Path] = None) -> Path:
+    def extract_thumbnail(self, youtube_url: str, output_path: Path | None = None) -> Path:
         """Extract video thumbnail.
         
         Args:
@@ -253,7 +252,7 @@ class YouTubeDownloader:
         
         raise ValueError(f"Could not extract video ID from URL: {url}")
     
-    def _get_video_info(self, video_path: Path, video_id: str, url: str) -> Dict[str, Any]:
+    def _get_video_info(self, video_path: Path, video_id: str, url: str) -> dict[str, Any]:
         """Get information about downloaded video."""
         stat = video_path.stat()
         
@@ -269,7 +268,7 @@ class YouTubeDownloader:
 
 
 # Convenience function
-def download_youtube_video(youtube_url: str, cache_dir: Optional[Path] = None) -> Dict[str, Any]:
+def download_youtube_video(youtube_url: str, cache_dir: Path | None = None) -> dict[str, Any]:
     """Download a YouTube video and return its information.
     
     Args:
@@ -283,7 +282,7 @@ def download_youtube_video(youtube_url: str, cache_dir: Optional[Path] = None) -
     return downloader.download_video(youtube_url)
 
 
-def get_youtube_info(youtube_url: str) -> Dict[str, Any]:
+def get_youtube_info(youtube_url: str) -> dict[str, Any]:
     """Get YouTube video information without downloading.
     
     Args:
@@ -296,7 +295,7 @@ def get_youtube_info(youtube_url: str) -> Dict[str, Any]:
     return downloader.get_video_info(youtube_url)
 
 
-def extract_youtube_thumbnail(youtube_url: str, output_path: Optional[Path] = None) -> Path:
+def extract_youtube_thumbnail(youtube_url: str, output_path: Path | None = None) -> Path:
     """Extract YouTube video thumbnail.
     
     Args:

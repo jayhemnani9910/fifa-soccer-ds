@@ -8,13 +8,15 @@ and integrates with Prometheus monitoring.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import subprocess
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any
+
 try:
     import psutil
 except ImportError:
@@ -55,16 +57,16 @@ class HealthChecker:
             'last_check_time': None
         }
     
-    def _load_config(self) -> Dict[str, Any]:
+    def _load_config(self) -> dict[str, Any]:
         """Load pipeline configuration."""
         try:
-            with open(self.config_path, 'r') as f:
+            with open(self.config_path) as f:
                 return yaml.safe_load(f)
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
             return self._get_default_config()
     
-    def _get_default_config(self) -> Dict[str, Any]:
+    def _get_default_config(self) -> dict[str, Any]:
         """Get default configuration if file loading fails."""
         return {
             'monitoring': {
@@ -74,7 +76,7 @@ class HealthChecker:
             }
         }
     
-    async def check_all_components(self) -> Dict[str, Any]:
+    async def check_all_components(self) -> dict[str, Any]:
         """Run health checks on all pipeline components."""
         logger.info("Starting comprehensive health check...")
         
@@ -140,7 +142,7 @@ class HealthChecker:
         
         return health_results
     
-    async def _check_youtube_downloader(self) -> Dict[str, Any]:
+    async def _check_youtube_downloader(self) -> dict[str, Any]:
         """Check YouTube downloader component health."""
         try:
             # Check if yt-dlp is available
@@ -168,7 +170,7 @@ class HealthChecker:
                 'timestamp': datetime.now().isoformat()
             }
     
-    async def _check_audio_processor(self) -> Dict[str, Any]:
+    async def _check_audio_processor(self) -> dict[str, Any]:
         """Check audio processing component health."""
         try:
             # Check if audio processing libraries are available
@@ -176,14 +178,14 @@ class HealthChecker:
             
             # Check whisper
             try:
-                import whisper
+                import whisper  # noqa: F401
                 checks.append('whisper: available')
             except ImportError:
                 checks.append('whisper: missing')
             
             # Check librosa
             try:
-                import librosa
+                import librosa  # noqa: F401
                 checks.append('librosa: available')
             except ImportError:
                 checks.append('librosa: missing')
@@ -213,13 +215,13 @@ class HealthChecker:
                 'timestamp': datetime.now().isoformat()
             }
     
-    async def _check_soccer_classifier(self) -> Dict[str, Any]:
+    async def _check_soccer_classifier(self) -> dict[str, Any]:
         """Check soccer classification component health."""
         try:
             # Check if classifier can be instantiated
-            from ..classify.soccer_classifier import SoccerClassifier
+            from src.classify.soccer_classifier import SoccerClassifier
             
-            classifier = SoccerClassifier()
+            SoccerClassifier()
             
             return {
                 'status': 'healthy',
@@ -234,7 +236,7 @@ class HealthChecker:
                 'timestamp': datetime.now().isoformat()
             }
     
-    async def _check_orchestrator(self) -> Dict[str, Any]:
+    async def _check_orchestrator(self) -> dict[str, Any]:
         """Check pipeline orchestrator health."""
         try:
             # Check if orchestrator can be instantiated
@@ -253,7 +255,7 @@ class HealthChecker:
                 'timestamp': datetime.now().isoformat()
             }
     
-    async def _check_api_server(self) -> Dict[str, Any]:
+    async def _check_api_server(self) -> dict[str, Any]:
         """Check API server health."""
         try:
             # Check if API server is responding
@@ -284,7 +286,7 @@ class HealthChecker:
                 'timestamp': datetime.now().isoformat()
             }
     
-    async def _check_monitoring(self) -> Dict[str, Any]:
+    async def _check_monitoring(self) -> dict[str, Any]:
         """Check monitoring system health."""
         try:
             monitoring_config = self.config.get('monitoring', {})
@@ -313,7 +315,7 @@ class HealthChecker:
                 'timestamp': datetime.now().isoformat()
             }
     
-    async def _check_storage(self) -> Dict[str, Any]:
+    async def _check_storage(self) -> dict[str, Any]:
         """Check storage and disk space."""
         try:
             # Check disk space
@@ -351,7 +353,7 @@ class HealthChecker:
                 'timestamp': datetime.now().isoformat()
             }
     
-    async def _check_dependencies(self) -> Dict[str, Any]:
+    async def _check_dependencies(self) -> dict[str, Any]:
         """Check system dependencies and requirements."""
         try:
             dependencies = [
@@ -398,7 +400,7 @@ class HealthChecker:
                 'timestamp': datetime.now().isoformat()
             }
     
-    async def _get_system_info(self) -> Dict[str, Any]:
+    async def _get_system_info(self) -> dict[str, Any]:
         """Get system information."""
         try:
             return {
@@ -412,7 +414,7 @@ class HealthChecker:
         except Exception as e:
             return {'error': str(e)}
     
-    def get_cached_health(self) -> Optional[Dict[str, Any]]:
+    def get_cached_health(self) -> dict[str, Any] | None:
         """Get cached health check results if still valid."""
         if not self._health_cache:
             return None
@@ -422,7 +424,7 @@ class HealthChecker:
             return self._health_cache
         return None
     
-    async def get_quick_status(self) -> Dict[str, Any]:
+    async def get_quick_status(self) -> dict[str, Any]:
         """Get a quick status check (uses cache if available)."""
         cached = self.get_cached_health()
         if cached:
@@ -477,10 +479,8 @@ class BackgroundHealthMonitor:
         self.running = False
         if self.task:
             self.task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self.task
-            except asyncio.CancelledError:
-                pass
         logger.info("Background health monitoring stopped")
     
     async def _monitor_loop(self):

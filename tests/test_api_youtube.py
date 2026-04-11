@@ -5,13 +5,11 @@ These tests verify the functionality of the FastAPI endpoints
 for YouTube video processing and analysis.
 """
 
-import pytest
-import asyncio
-from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
-import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
 
 # Add src to path
 src_path = Path(__file__).parent.parent / "src"

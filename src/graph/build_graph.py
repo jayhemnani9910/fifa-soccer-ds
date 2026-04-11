@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 from itertools import combinations
 
 try:
@@ -212,7 +211,7 @@ def build_track_graph_optimized(
     if distance_threshold > 0:
         threshold_sq = distance_threshold ** 2
         
-        for frame_id, node_indices in frame_to_nodes.items():
+        for _frame_id, node_indices in frame_to_nodes.items():
             if len(node_indices) <= 1:
                 continue
                 

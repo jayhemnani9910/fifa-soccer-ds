@@ -73,7 +73,17 @@ lint.select = [
 lint.ignore = [
   "E203",
   "E501",
+  "B904",
+  "SIM108",
+  "SIM117",
+  "SIM102",
+  "SIM105",
+  "SIM115",
+  "B017",
+  "B905",
+  "E712",
 ]
+lint.per-file-ignores = {"tests/*" = ["E402"]}
 format.quote-style = "double"
 format.indent-style = "space"
 format.skip-magic-trailing-comma = false

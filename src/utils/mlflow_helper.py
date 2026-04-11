@@ -8,7 +8,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 try:
     import mlflow
@@ -31,10 +31,10 @@ class MLflowConfig:
     
     def __init__(
         self,
-        tracking_uri: Optional[str] = None,
+        tracking_uri: str | None = None,
         experiment_name: str = DEFAULT_EXPERIMENT_NAME,
-        artifact_location: Optional[str] = None,
-        default_tags: Optional[Dict[str, str]] = None
+        artifact_location: str | None = None,
+        default_tags: dict[str, str] | None = None
     ):
         self.tracking_uri = tracking_uri or os.getenv("MLFLOW_TRACKING_URI")
         self.experiment_name = experiment_name
@@ -96,7 +96,7 @@ def ensure_local_backend(path: Path = DEFAULT_TRACKING_DIR) -> Path:
         raise
 
 
-def ensure_experiment_exists(experiment_name: str, artifact_location: Optional[str] = None) -> str:
+def ensure_experiment_exists(experiment_name: str, artifact_location: str | None = None) -> str:
     """Ensure MLflow experiment exists, return experiment ID."""
     if not mlflow:
         raise ImportError("MLflow not available")
@@ -125,9 +125,9 @@ def ensure_experiment_exists(experiment_name: str, artifact_location: Optional[s
 @contextmanager
 def start_run(
     experiment: str = DEFAULT_EXPERIMENT_NAME,
-    run_name: Optional[str] = None,
-    tags: Optional[Dict[str, str]] = None,
-    description: Optional[str] = None
+    run_name: str | None = None,
+    tags: dict[str, str] | None = None,
+    description: str | None = None
 ) -> Iterator[Run]:
     """Enhanced context manager with robust error handling."""
     if not mlflow:
@@ -164,9 +164,9 @@ def start_run(
 
 
 def log_run_metrics(
-    metrics: Dict[str, float], 
-    step: Optional[int] = None,
-    prefix: Optional[str] = None
+    metrics: dict[str, float], 
+    step: int | None = None,
+    prefix: str | None = None
 ):
     """Safely log metrics with error handling."""
     if not mlflow or not metrics:
@@ -185,8 +185,8 @@ def log_run_metrics(
 
 
 def log_run_params(
-    params: Dict[str, Any], 
-    prefix: Optional[str] = None
+    params: dict[str, Any], 
+    prefix: str | None = None
 ):
     """Safely log parameters with error handling."""
     if not mlflow or not params:
@@ -206,7 +206,7 @@ def log_run_params(
 
 def log_run_artifacts(
     artifact_path: str, 
-    artifact_dir: Optional[str] = None
+    artifact_dir: str | None = None
 ):
     """Safely log artifacts with error handling."""
     if not mlflow or not artifact_path:
@@ -230,7 +230,7 @@ def log_run_artifacts(
         LOGGER.warning("Failed to log artifacts to MLflow: %s", e)
 
 
-def get_active_run() -> Optional[Run]:
+def get_active_run() -> Run | None:
     """Get currently active MLflow run safely."""
     if not mlflow:
         return None

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -31,7 +30,7 @@ class TeamAssignment:
     track_id: int
     team_id: int  # 0=Team A (home), 1=Team B (away), -1=referee/unknown
     confidence: float
-    dominant_color: Tuple[int, int, int]  # BGR color
+    dominant_color: tuple[int, int, int]  # BGR color
     cluster_id: int
 
 
@@ -71,16 +70,16 @@ class JerseyColorClassifier:
         # Number of clusters: teams + optional referee
         self.n_clusters = n_teams + (1 if referee_detection else 0)
 
-        self.kmeans: Optional[KMeans] = None
-        self.cluster_to_team: Dict[int, int] = {}
-        self.cluster_colors: Dict[int, Tuple[int, int, int]] = {}
+        self.kmeans: KMeans | None = None
+        self.cluster_to_team: dict[int, int] = {}
+        self.cluster_colors: dict[int, tuple[int, int, int]] = {}
 
     def extract_jersey_color(
         self,
         frame: np.ndarray,
-        bbox: List[float],
+        bbox: list[float],
         use_hsv: bool = True
-    ) -> Optional[np.ndarray]:
+    ) -> np.ndarray | None:
         """Extract dominant jersey color from a player bounding box.
 
         Args:
@@ -153,7 +152,7 @@ class JerseyColorClassifier:
 
     def fit(
         self,
-        color_samples: List[Tuple[int, np.ndarray]]
+        color_samples: list[tuple[int, np.ndarray]]
     ) -> None:
         """Fit the classifier on collected color samples.
 
@@ -188,7 +187,7 @@ class JerseyColorClassifier:
         self,
         colors: np.ndarray,
         labels: np.ndarray,
-        track_ids: List[int]
+        track_ids: list[int]
     ) -> None:
         """Assign team IDs to clusters based on cluster characteristics."""
 
@@ -212,7 +211,7 @@ class JerseyColorClassifier:
         # Assign teams based on size
         self.cluster_to_team = {}
 
-        for i, (cluster_id, size) in enumerate(sorted_clusters):
+        for i, (cluster_id, _size) in enumerate(sorted_clusters):
             if i < self.n_teams:
                 # Assign as team (0 = home, 1 = away)
                 self.cluster_to_team[cluster_id] = i
@@ -226,7 +225,7 @@ class JerseyColorClassifier:
     def predict(
         self,
         color: np.ndarray
-    ) -> Tuple[int, float]:
+    ) -> tuple[int, float]:
         """Predict team ID for a color sample.
 
         Args:
@@ -256,10 +255,10 @@ class JerseyColorClassifier:
 
     def classify_tracks(
         self,
-        frames: Dict[int, np.ndarray],
-        tracklets: List[Dict],
+        frames: dict[int, np.ndarray],
+        tracklets: list[dict],
         sample_frames: int = 5
-    ) -> Dict[int, TeamAssignment]:
+    ) -> dict[int, TeamAssignment]:
         """Classify all tracks across frames.
 
         Args:
@@ -272,7 +271,7 @@ class JerseyColorClassifier:
         """
         # Step 1: Collect color samples from each track
         color_samples = []
-        track_colors: Dict[int, List[np.ndarray]] = {}
+        track_colors: dict[int, list[np.ndarray]] = {}
 
         for tracklet in tracklets:
             track_id = tracklet.get("track_id")
@@ -305,7 +304,7 @@ class JerseyColorClassifier:
             return self._position_based_fallback(tracklets)
 
         # Step 3: Classify each track using median color
-        assignments: Dict[int, TeamAssignment] = {}
+        assignments: dict[int, TeamAssignment] = {}
 
         for track_id, colors in track_colors.items():
             # Use median color for this track
@@ -330,16 +329,16 @@ class JerseyColorClassifier:
 
     def _position_based_fallback(
         self,
-        tracklets: List[Dict]
-    ) -> Dict[int, TeamAssignment]:
+        tracklets: list[dict]
+    ) -> dict[int, TeamAssignment]:
         """Fallback to position-based team assignment.
 
         Assigns team based on average x-position:
         - Left half of pitch = home team (0)
         - Right half of pitch = away team (1)
         """
-        assignments: Dict[int, TeamAssignment] = {}
-        track_positions: Dict[int, List[float]] = {}
+        assignments: dict[int, TeamAssignment] = {}
+        track_positions: dict[int, list[float]] = {}
 
         for tracklet in tracklets:
             track_id = tracklet.get("track_id")

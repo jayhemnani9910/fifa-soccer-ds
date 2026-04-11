@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any, Union
+from typing import Any
 
 import numpy as np
 
@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover - optional dependency
     cv2 = None  # type: ignore[assignment]
     CV2_AVAILABLE = False
 
-PointList = Iterable[Tuple[float, float]]
+PointList = Iterable[tuple[float, float]]
 
 def _cv2_circle(img, center, radius, color, thickness=-1):
     """Safely call cv2.circle if available."""
@@ -139,14 +139,14 @@ def image_to_pitch(image_points: PointList, H_inv: np.ndarray) -> list[tuple[flo
 @dataclass
 class CalibrationData:
     """Serializable calibration data structure."""
-    homography: List[List[float]]
-    inverse_homography: List[List[float]]
-    image_points: List[List[float]]
-    world_points: List[List[float]]
+    homography: list[list[float]]
+    inverse_homography: list[list[float]]
+    image_points: list[list[float]]
+    world_points: list[list[float]]
     reprojection_error: float
     timestamp: str
-    image_shape: Tuple[int, int]
-    pitch_dimensions: Tuple[float, float]
+    image_shape: tuple[int, int]
+    pitch_dimensions: tuple[float, float]
 
 
 class HomographyCalibrator:
@@ -159,26 +159,26 @@ class HomographyCalibrator:
     - Calibration visualization
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         """Initialize calibrator.
         
         Args:
             config: Optional configuration dictionary
         """
         self.config = config or {}
-        self.H: Optional[np.ndarray] = None
-        self.H_inv: Optional[np.ndarray] = None
-        self.image_points: List[np.ndarray] = []
-        self.world_points: List[np.ndarray] = []
+        self.H: np.ndarray | None = None
+        self.H_inv: np.ndarray | None = None
+        self.image_points: list[np.ndarray] = []
+        self.world_points: list[np.ndarray] = []
         self.reprojection_error: float = float('inf')
-        self.image_shape: Optional[Tuple[int, int]] = None
-        self.pitch_dimensions: Tuple[float, float] = (105.0, 68.0)  # Standard FIFA pitch
+        self.image_shape: tuple[int, int] | None = None
+        self.pitch_dimensions: tuple[float, float] = (105.0, 68.0)  # Standard FIFA pitch
         
     def calibrate_from_points(
         self, 
-        image_points: List[Tuple[float, float]], 
-        world_points: List[Tuple[float, float]],
-        image_shape: Tuple[int, int],
+        image_points: list[tuple[float, float]], 
+        world_points: list[tuple[float, float]],
+        image_shape: tuple[int, int],
         ransac_threshold: float = 3.0
     ) -> bool:
         """
@@ -231,7 +231,7 @@ class HomographyCalibrator:
             return float('inf')
             
         errors = []
-        for img_pt, world_pt in zip(self.image_points, self.world_points):
+        for img_pt, world_pt in zip(self.image_points, self.world_points, strict=False):
             projected = self.project_world_to_image(world_pt)
             error = np.linalg.norm(projected - img_pt)
             errors.append(error)
@@ -281,7 +281,7 @@ class HomographyCalibrator:
             json.dump(asdict(data), f, indent=2)
             
     @classmethod
-    def load_calibration(cls, path: Path, config: Optional[Dict[str, Any]] = None) -> 'HomographyCalibrator':
+    def load_calibration(cls, path: Path, config: dict[str, Any] | None = None) -> HomographyCalibrator:
         """
         Load pre-computed calibration from file with validation.
         
@@ -314,7 +314,7 @@ class HomographyCalibrator:
             
         return instance
         
-    def visualize_calibration(self, image: np.ndarray, output_path: Optional[Path] = None) -> np.ndarray:
+    def visualize_calibration(self, image: np.ndarray, output_path: Path | None = None) -> np.ndarray:
         """
         Visualize calibration on sample image with point correspondences.
         
@@ -345,7 +345,7 @@ class HomographyCalibrator:
                         _cv2_font_hershey_simplex(), 0.5, (0, 0, 255), 1, None)
             
         # Draw lines connecting correspondences
-        for img_pt, world_pt in zip(self.image_points, self.world_points):
+        for img_pt, world_pt in zip(self.image_points, self.world_points, strict=False):
             projected = self.project_world_to_image(world_pt)
             _cv2_line(vis, tuple(map(int, img_pt)), tuple(map(int, projected)), (255, 255, 0), 1)
             
@@ -359,7 +359,7 @@ class HomographyCalibrator:
             
         return vis
         
-    def get_calibration_summary(self) -> Dict[str, Any]:
+    def get_calibration_summary(self) -> dict[str, Any]:
         """Get summary of calibration quality and parameters."""
         if self.H is None:
             return {"status": "not_calibrated"}

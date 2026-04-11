@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -35,7 +34,7 @@ class PlayerState:
     player_id: int
     team_id: int  # 0 = home, 1 = away, -1 = unknown/ball
     position: np.ndarray  # (x, y) in meters or normalized coordinates
-    velocity: Optional[np.ndarray] = None  # (vx, vy) in m/s
+    velocity: np.ndarray | None = None  # (vx, vy) in m/s
 
 
 @dataclass(slots=True)
@@ -72,8 +71,8 @@ class PitchControlModel:
 
     def __init__(
         self,
-        grid_shape: Tuple[int, int] = (12, 16),
-        config: Optional[PitchControlConfig] = None
+        grid_shape: tuple[int, int] = (12, 16),
+        config: PitchControlConfig | None = None
     ) -> None:
         self.grid_shape = grid_shape
         self.config = config or PitchControlConfig()
@@ -90,7 +89,7 @@ class PitchControlModel:
     def compute(
         self,
         frame_id: int,
-        players: Optional[List[PlayerState]] = None
+        players: list[PlayerState] | None = None
     ) -> PitchControlResult:
         """Compute pitch control for a frame.
 
@@ -139,8 +138,8 @@ class PitchControlModel:
 
     def _compute_control_grid(
         self,
-        home_players: List[PlayerState],
-        away_players: List[PlayerState]
+        home_players: list[PlayerState],
+        away_players: list[PlayerState]
     ) -> np.ndarray:
         """Compute control probability grid using time-to-intercept model.
 
@@ -168,7 +167,7 @@ class PitchControlModel:
 
     def _compute_team_arrival_times(
         self,
-        players: List[PlayerState]
+        players: list[PlayerState]
     ) -> np.ndarray:
         """Compute arrival times for all players to all grid points.
 

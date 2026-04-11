@@ -7,21 +7,20 @@ classes to ensure proper version management and conflict resolution.
 """
 
 import json
-import tempfile
-import time
-from pathlib import Path
-from unittest.mock import Mock, patch
 
 # Add src to path for testing
 import sys
+import tempfile
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Import classes for testing
 from train.weekly_retrainer import (
-    SemanticVersion,
+    AtomicFileWriter,
     ModelVersionConflict,
     ModelVersionManager,
-    AtomicFileWriter
+    SemanticVersion,
 )
 
 
@@ -207,7 +206,7 @@ class TestModelVersionManager:
     def test_conflict_detection(self):
         """Test conflict detection with similar performance."""
         # Create version history
-        v1 = self.manager.increment_version("patch")
+        self.manager.increment_version("patch")
         
         # Add history entry with metrics
         history_file = self.manager.versions_file
@@ -285,7 +284,7 @@ class TestVersionManagementIntegration:
         manager = ModelVersionManager(self.version_file)
         
         # Create initial version with metrics
-        v1 = manager.increment_version("minor")
+        manager.increment_version("minor")
         
         # Simulate version history with metrics
         history_file = manager.versions_file

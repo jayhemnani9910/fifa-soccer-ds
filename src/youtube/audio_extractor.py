@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Any
 
 try:
     import whisper
@@ -63,7 +63,7 @@ class AudioExtractor:
             LOGGER.error("Failed to load Whisper model: %s", e)
             raise RuntimeError(f"Failed to load Whisper model: {e}") from e
     
-    def extract_audio(self, video_path: Path, output_path: Optional[Path] = None) -> Path:
+    def extract_audio(self, video_path: Path, output_path: Path | None = None) -> Path:
         """Extract audio from video file.
         
         Args:
@@ -98,7 +98,7 @@ class AudioExtractor:
             LOGGER.error("Failed to extract audio from %s: %s", video_path, e)
             raise RuntimeError(f"Audio extraction failed: {e}") from e
     
-    def transcribe_audio(self, audio_path: Path, language: Optional[str] = None) -> Dict[str, Any]:
+    def transcribe_audio(self, audio_path: Path, language: str | None = None) -> dict[str, Any]:
         """Transcribe audio to text using Whisper.
         
         Args:
@@ -154,7 +154,7 @@ class AudioExtractor:
             LOGGER.error("Failed to transcribe audio %s: %s", audio_path, e)
             raise RuntimeError(f"Transcription failed: {e}") from e
     
-    def analyze_audio_features(self, audio_path: Path) -> Dict[str, Any]:
+    def analyze_audio_features(self, audio_path: Path) -> dict[str, Any]:
         """Analyze audio features for soccer content classification.
         
         Args:
@@ -204,8 +204,8 @@ class AudioExtractor:
             LOGGER.error("Failed to analyze audio %s: %s", audio_path, e)
             raise RuntimeError(f"Audio analysis failed: {e}") from e
     
-    def classify_soccer_audio(self, transcription: Dict[str, Any], 
-                            audio_features: Dict[str, Any]) -> Dict[str, Any]:
+    def classify_soccer_audio(self, transcription: dict[str, Any], 
+                            audio_features: dict[str, Any]) -> dict[str, Any]:
         """Classify if audio content is soccer-related.
         
         Args:
@@ -263,7 +263,7 @@ class AudioExtractor:
         
         return classification
     
-    def process_sample_audio(self, video_path: Path, duration_seconds: float = 60.0) -> Dict[str, Any]:
+    def process_sample_audio(self, video_path: Path, duration_seconds: float = 60.0) -> dict[str, Any]:
         """Process a sample of audio from video for classification.
         
         Args:
@@ -322,7 +322,7 @@ class AudioExtractor:
 
 
 # Convenience functions
-def extract_audio_from_video(video_path: Path, output_path: Optional[Path] = None) -> Path:
+def extract_audio_from_video(video_path: Path, output_path: Path | None = None) -> Path:
     """Extract audio from video file.
     
     Args:
@@ -336,7 +336,7 @@ def extract_audio_from_video(video_path: Path, output_path: Optional[Path] = Non
     return extractor.extract_audio(video_path, output_path)
 
 
-def transcribe_youtube_audio(audio_path: Path, language: Optional[str] = None) -> Dict[str, Any]:
+def transcribe_youtube_audio(audio_path: Path, language: str | None = None) -> dict[str, Any]:
     """Transcribe audio to text.
     
     Args:
@@ -350,8 +350,8 @@ def transcribe_youtube_audio(audio_path: Path, language: Optional[str] = None) -
     return extractor.transcribe_audio(audio_path, language)
 
 
-def classify_youtube_audio(transcription: Dict[str, Any], 
-                         audio_features: Dict[str, Any]) -> Dict[str, Any]:
+def classify_youtube_audio(transcription: dict[str, Any], 
+                         audio_features: dict[str, Any]) -> dict[str, Any]:
     """Classify if audio content is soccer-related.
     
     Args:
