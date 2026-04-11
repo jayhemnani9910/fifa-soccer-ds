@@ -27,6 +27,7 @@ LOGGER = logging.getLogger(__name__)
 @dataclass(slots=True)
 class TeamAssignment:
     """Team assignment for a tracked player."""
+
     track_id: int
     team_id: int  # 0=Team A (home), 1=Team B (away), -1=referee/unknown
     confidence: float
@@ -47,10 +48,7 @@ class JerseyColorClassifier:
     """
 
     def __init__(
-        self,
-        n_teams: int = 2,
-        min_samples: int = 5,
-        referee_detection: bool = True
+        self, n_teams: int = 2, min_samples: int = 5, referee_detection: bool = True
     ) -> None:
         if KMeans is None:
             raise ImportError(
@@ -75,10 +73,7 @@ class JerseyColorClassifier:
         self.cluster_colors: dict[int, tuple[int, int, int]] = {}
 
     def extract_jersey_color(
-        self,
-        frame: np.ndarray,
-        bbox: list[float],
-        use_hsv: bool = True
+        self, frame: np.ndarray, bbox: list[float], use_hsv: bool = True
     ) -> np.ndarray | None:
         """Extract dominant jersey color from a player bounding box.
 
@@ -150,10 +145,7 @@ class JerseyColorClassifier:
             LOGGER.warning("Error extracting jersey color: %s", e)
             return None
 
-    def fit(
-        self,
-        color_samples: list[tuple[int, np.ndarray]]
-    ) -> None:
+    def fit(self, color_samples: list[tuple[int, np.ndarray]]) -> None:
         """Fit the classifier on collected color samples.
 
         Args:
@@ -161,8 +153,7 @@ class JerseyColorClassifier:
         """
         if len(color_samples) < self.min_samples:
             LOGGER.warning(
-                "Insufficient samples for clustering: %d < %d",
-                len(color_samples), self.min_samples
+                "Insufficient samples for clustering: %d < %d", len(color_samples), self.min_samples
             )
             return
 
@@ -173,21 +164,14 @@ class JerseyColorClassifier:
         LOGGER.info("Fitting K-Means with %d samples, %d clusters", len(colors), self.n_clusters)
 
         # Fit K-Means
-        self.kmeans = KMeans(
-            n_clusters=self.n_clusters,
-            random_state=42,
-            n_init=10
-        )
+        self.kmeans = KMeans(n_clusters=self.n_clusters, random_state=42, n_init=10)
         labels = self.kmeans.fit_predict(colors)
 
         # Analyze clusters to assign team IDs
         self._assign_teams_to_clusters(colors, labels, track_ids)
 
     def _assign_teams_to_clusters(
-        self,
-        colors: np.ndarray,
-        labels: np.ndarray,
-        track_ids: list[int]
+        self, colors: np.ndarray, labels: np.ndarray, track_ids: list[int]
     ) -> None:
         """Assign team IDs to clusters based on cluster characteristics."""
 
@@ -222,10 +206,7 @@ class JerseyColorClassifier:
         LOGGER.info("Cluster assignments: %s", self.cluster_to_team)
         LOGGER.info("Cluster colors: %s", self.cluster_colors)
 
-    def predict(
-        self,
-        color: np.ndarray
-    ) -> tuple[int, float]:
+    def predict(self, color: np.ndarray) -> tuple[int, float]:
         """Predict team ID for a color sample.
 
         Args:
@@ -254,10 +235,7 @@ class JerseyColorClassifier:
         return (team_id, confidence)
 
     def classify_tracks(
-        self,
-        frames: dict[int, np.ndarray],
-        tracklets: list[dict],
-        sample_frames: int = 5
+        self, frames: dict[int, np.ndarray], tracklets: list[dict], sample_frames: int = 5
     ) -> dict[int, TeamAssignment]:
         """Classify all tracks across frames.
 
@@ -294,7 +272,9 @@ class JerseyColorClassifier:
                     track_colors[track_id] = []
                 track_colors[track_id].append(color)
 
-        LOGGER.info("Collected %d color samples from %d tracks", len(color_samples), len(track_colors))
+        LOGGER.info(
+            "Collected %d color samples from %d tracks", len(color_samples), len(track_colors)
+        )
 
         # Step 2: Fit classifier if enough samples
         if len(color_samples) >= self.min_samples:
@@ -320,17 +300,14 @@ class JerseyColorClassifier:
                 team_id=team_id,
                 confidence=confidence,
                 dominant_color=dominant_color,
-                cluster_id=cluster_id
+                cluster_id=cluster_id,
             )
 
         LOGGER.info("Classified %d tracks into teams", len(assignments))
 
         return assignments
 
-    def _position_based_fallback(
-        self,
-        tracklets: list[dict]
-    ) -> dict[int, TeamAssignment]:
+    def _position_based_fallback(self, tracklets: list[dict]) -> dict[int, TeamAssignment]:
         """Fallback to position-based team assignment.
 
         Assigns team based on average x-position:
@@ -369,7 +346,7 @@ class JerseyColorClassifier:
                 team_id=team_id,
                 confidence=0.3,  # Low confidence for position-based
                 dominant_color=(128, 128, 128),
-                cluster_id=-1
+                cluster_id=-1,
             )
 
         return assignments

@@ -42,6 +42,7 @@ try:
     from src.analytics.tactical import PlayerState, TacticalAnalyzer, TacticalConfig
     from src.analytics.team_classifier import JerseyColorClassifier, TeamAssignment  # noqa: F401
     from src.calib.pitch_transform import PitchCoordinateTransformer
+
     TACTICAL_AVAILABLE = True
 except ImportError:
     TACTICAL_AVAILABLE = False
@@ -52,6 +53,7 @@ try:
     from src.youtube.audio_extractor import AudioExtractor  # noqa: F401
     from src.youtube.metadata_parser import YouTubeMetadataParser  # noqa: F401
     from src.youtube.video_downloader import YouTubeDownloader
+
     YOUTUBE_AVAILABLE = True
 except ImportError:
     YOUTUBE_AVAILABLE = False
@@ -149,15 +151,15 @@ def process_frames_directory(
     config: PipelineConfig | None = None,
 ) -> PipelineSummary:
     """Process a directory of frames through the full pipeline.
-    
+
     Args:
         frames_dir: Directory containing frame images
         output_dir: Directory to save results
         config: Pipeline configuration options
-        
+
     Returns:
         PipelineSummary: Summary of processing results
-        
+
     Raises:
         FileNotFoundError: If frames directory doesn't exist
         ValueError: If configuration is invalid
@@ -170,14 +172,14 @@ def process_frames_directory(
     # Validate inputs
     if not frames_dir.exists():
         raise FileNotFoundError(f"Frames directory not found: {frames_dir}")
-    
+
     if not frames_dir.is_dir():
         raise ValueError(f"Frames path is not a directory: {frames_dir}")
-    
+
     # Validate configuration
     if not 0 <= cfg.confidence <= 1:
         raise ValueError(f"Confidence must be between 0 and 1, got {cfg.confidence}")
-    
+
     if not 0 <= cfg.min_confidence <= 1:
         raise ValueError(f"Min confidence must be between 0 and 1, got {cfg.min_confidence}")
 
@@ -243,7 +245,7 @@ def process_frames_directory(
         # Read frame with validation
         if cv2 is None:
             raise ImportError("OpenCV required for frame processing")
-        
+
         try:
             frame = cv2.imread(frame_path.as_posix())
             if frame is None:
@@ -260,12 +262,12 @@ def process_frames_directory(
             results = detector.predict(frame, conf=cfg.confidence, verbose=False)
             detections = extract_detections(results[0]) if results else []
             total_detections += len(detections)
-            
+
             # Update metrics
             FRAMES_PROCESSED.inc()
             DETECTIONS_MADE.inc(len(detections))
             update_system_metrics()
-            
+
         except Exception as e:
             LOGGER.error("Detection failed for frame %s: %s", frame_path.name, e)
             detections = []
@@ -296,10 +298,10 @@ def process_frames_directory(
             # Collect unique track IDs and update metrics
             for track in tracklets.items:
                 all_track_ids.add(track.track_id)
-            
+
             # Update tracking metrics
             TRACKS_CREATED.inc(len(tracklets.items))
-            
+
         except Exception as e:
             LOGGER.error("Tracking failed for frame %s: %s", frame_path.name, e)
             tracklets = Tracklets(frame_id=frame_idx, items=[])
@@ -366,7 +368,9 @@ def process_frames_directory(
             else:
                 transformer = PitchCoordinateTransformer(
                     mode="identity",
-                    image_shape=(frame.shape[0], frame.shape[1]) if 'frame' in dir() else (1080, 1920)
+                    image_shape=(frame.shape[0], frame.shape[1])
+                    if "frame" in dir()
+                    else (1080, 1920),
                 )
 
             # Initialize tactical analyzer
@@ -395,12 +399,14 @@ def process_frames_directory(
                                 frame_images[frame_id] = img
 
                         for track in tracklets.items:
-                            all_tracklet_data.append({
-                                "track_id": track.track_id,
-                                "bbox": track.bbox,
-                                "frame_id": frame_id,
-                                "class_name": track.extras.get("class_name", ""),
-                            })
+                            all_tracklet_data.append(
+                                {
+                                    "track_id": track.track_id,
+                                    "bbox": track.bbox,
+                                    "frame_id": frame_id,
+                                    "class_name": track.extras.get("class_name", ""),
+                                }
+                            )
 
                     # Run classification
                     team_assignments = team_classifier.classify_tracks(
@@ -420,7 +426,9 @@ def process_frames_directory(
                     LOGGER.info("Classified %d players into teams", len(team_assignments))
 
                 except Exception as e:
-                    LOGGER.warning("Team classification failed: %s, using position-based fallback", e)
+                    LOGGER.warning(
+                        "Team classification failed: %s, using position-based fallback", e
+                    )
                     team_assignments = {}
             else:
                 team_assignments = {}
@@ -454,12 +462,14 @@ def process_frames_directory(
                         # Fallback: position-based
                         team_id = 0 if position[0] < 0.5 else 1
 
-                    players.append(PlayerState(
-                        player_id=track.track_id,
-                        team_id=team_id,
-                        position=position,
-                        velocity=None
-                    ))
+                    players.append(
+                        PlayerState(
+                            player_id=track.track_id,
+                            team_id=team_id,
+                            position=position,
+                            velocity=None,
+                        )
+                    )
 
                 # Compute tactical metrics
                 result = tactical_analyzer.compute(frame_id, players)
@@ -467,8 +477,12 @@ def process_frames_directory(
 
             # Calculate averages
             if tactical_results:
-                avg_home_control = sum(r.pitch_control.home_control_pct for r in tactical_results) / len(tactical_results)
-                avg_away_control = sum(r.pitch_control.away_control_pct for r in tactical_results) / len(tactical_results)
+                avg_home_control = sum(
+                    r.pitch_control.home_control_pct for r in tactical_results
+                ) / len(tactical_results)
+                avg_away_control = sum(
+                    r.pitch_control.away_control_pct for r in tactical_results
+                ) / len(tactical_results)
 
                 # Save tactical results
                 tactical_output = {
@@ -506,12 +520,14 @@ def process_frames_directory(
 
                 LOGGER.info(
                     "Tactical analysis complete: Home %.1f%%, Away %.1f%%",
-                    avg_home_control, avg_away_control
+                    avg_home_control,
+                    avg_away_control,
                 )
 
         except Exception as e:
             LOGGER.error("Tactical analytics failed: %s", e)
             import traceback
+
             LOGGER.debug(traceback.format_exc())
 
     elif cfg.enable_tactical_analytics and not TACTICAL_AVAILABLE:
@@ -651,17 +667,17 @@ def process_youtube_video(
     force_full_analysis: bool = False,
 ) -> dict:
     """Process YouTube video through Smart YouTube Analyzer.
-    
+
     Args:
         youtube_url: YouTube video URL
         output_dir: Directory to save results
         config: Pipeline configuration options
         sample_duration: Duration of audio sample for classification (seconds)
         force_full_analysis: Force full soccer analysis even if low confidence
-        
+
     Returns:
         Dict containing analysis results
-        
+
     Raises:
         ImportError: If YouTube dependencies are not installed
         ValueError: If YouTube URL is invalid
@@ -672,132 +688,132 @@ def process_youtube_video(
             "YouTube dependencies not installed. Install with: "
             "pip install yt-dlp openai-whisper librosa scikit-learn"
         )
-    
+
     cfg = config or PipelineConfig()
     output_dir = Path(output_dir)
-    
+
     # Validate YouTube URL
     if not _is_valid_youtube_url(youtube_url):
         raise ValueError(f"Invalid YouTube URL: {youtube_url}")
-    
+
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     try:
         LOGGER.info("Starting YouTube analysis: %s", youtube_url)
-        
+
         # Step 1: Classify content (soccer vs non-soccer)
         LOGGER.info("Step 1: Classifying content...")
         classifier = SoccerClassifier(confidence_threshold=0.75)
         classification_result = classifier.classify_youtube_content(
             youtube_url, sample_duration=sample_duration
         )
-        
+
         # Step 2: Handle non-soccer content
-        if not classification_result['is_soccer'] and not force_full_analysis:
+        if not classification_result["is_soccer"] and not force_full_analysis:
             LOGGER.info("Content classified as non-soccer")
-            
+
             # Generate minimal summary for non-soccer content
             result = {
-                'type': 'non-soccer',
-                'youtube_url': youtube_url,
-                'classification': classification_result,
-                'summary': {
-                    'confidence': classification_result['confidence'],
-                    'reason': 'Content does not appear to be soccer-related',
-                    'recommendation': 'This video does not contain soccer content',
+                "type": "non-soccer",
+                "youtube_url": youtube_url,
+                "classification": classification_result,
+                "summary": {
+                    "confidence": classification_result["confidence"],
+                    "reason": "Content does not appear to be soccer-related",
+                    "recommendation": "This video does not contain soccer content",
                 },
-                'processing_info': {
-                    'sample_duration': sample_duration,
-                    'analysis_type': 'classification_only',
-                }
+                "processing_info": {
+                    "sample_duration": sample_duration,
+                    "analysis_type": "classification_only",
+                },
             }
-            
+
             # Save result
-            result_path = output_dir / 'youtube_analysis.json'
-            with result_path.open('w', encoding='utf-8') as f:
+            result_path = output_dir / "youtube_analysis.json"
+            with result_path.open("w", encoding="utf-8") as f:
                 json.dump(result, f, indent=2)
-            
+
             LOGGER.info("Non-soccer analysis complete: %s", result_path)
             return result
-        
+
         # Step 3: Handle soccer content (full analysis)
         LOGGER.info("Content classified as soccer - proceeding with full analysis")
-        
+
         # Download video
         LOGGER.info("Step 2: Downloading video...")
         downloader = YouTubeDownloader()
         video_info = downloader.download_video(youtube_url)
-        video_path = Path(video_info['video_path'])
-        
+        video_path = Path(video_info["video_path"])
+
         try:
             # Extract frames for processing
             LOGGER.info("Step 3: Extracting frames...")
-            frames_dir = output_dir / 'frames'
+            frames_dir = output_dir / "frames"
             frames_dir.mkdir(exist_ok=True)
-            
+
             # Use existing frame extraction logic
             _extract_frames_from_video(video_path, frames_dir, max_frames=cfg.max_frames)
-            
+
             # Run existing pipeline on extracted frames
             LOGGER.info("Step 4: Running soccer analysis pipeline...")
             pipeline_summary = process_frames_directory(
                 frames_dir=frames_dir,
-                output_dir=output_dir / 'soccer_analysis',
+                output_dir=output_dir / "soccer_analysis",
                 config=config,
             )
-            
+
             # Generate comprehensive result
             LOGGER.info("Step 5: Generating comprehensive report...")
             result = {
-                'type': 'soccer',
-                'youtube_url': youtube_url,
-                'classification': classification_result,
-                'match': {
-                    'title': classification_result['processing_info']['video_info']['title'],
-                    'duration': classification_result['processing_info']['video_info']['duration'],
-                    'uploader': classification_result['processing_info']['video_info']['uploader'],
-                    'detected_competition': _detect_competition_from_title(
-                        classification_result['processing_info']['video_info']['title']
+                "type": "soccer",
+                "youtube_url": youtube_url,
+                "classification": classification_result,
+                "match": {
+                    "title": classification_result["processing_info"]["video_info"]["title"],
+                    "duration": classification_result["processing_info"]["video_info"]["duration"],
+                    "uploader": classification_result["processing_info"]["video_info"]["uploader"],
+                    "detected_competition": _detect_competition_from_title(
+                        classification_result["processing_info"]["video_info"]["title"]
                     ),
                 },
-                'pipeline_summary': {
-                    'total_frames': pipeline_summary.total_frames,
-                    'total_detections': pipeline_summary.total_detections,
-                    'unique_track_ids': pipeline_summary.unique_track_ids,
-                    'graph_nodes': pipeline_summary.graph_nodes,
-                    'graph_edges': pipeline_summary.graph_edges,
+                "pipeline_summary": {
+                    "total_frames": pipeline_summary.total_frames,
+                    "total_detections": pipeline_summary.total_detections,
+                    "unique_track_ids": pipeline_summary.unique_track_ids,
+                    "graph_nodes": pipeline_summary.graph_nodes,
+                    "graph_edges": pipeline_summary.graph_edges,
                 },
-                'events': _extract_events_from_analysis(pipeline_summary),
-                'players': _analyze_players_from_tracks(pipeline_summary),
-                'team_metrics': _calculate_team_metrics(pipeline_summary),
-                'figures': {
-                    'detection_visualizations': str(output_dir / 'soccer_analysis' / 'overlays'),
-                    'graphs': str(output_dir / 'soccer_analysis' / 'graphs'),
+                "events": _extract_events_from_analysis(pipeline_summary),
+                "players": _analyze_players_from_tracks(pipeline_summary),
+                "team_metrics": _calculate_team_metrics(pipeline_summary),
+                "figures": {
+                    "detection_visualizations": str(output_dir / "soccer_analysis" / "overlays"),
+                    "graphs": str(output_dir / "soccer_analysis" / "graphs"),
                 },
-                'written_report_md': _generate_tactical_report(pipeline_summary),
-                'processing_info': {
-                    'sample_duration': sample_duration,
-                    'analysis_type': 'full_soccer_analysis',
-                    'video_downloaded': video_info['video_path'],
-                    'frames_extracted': len(list(frames_dir.glob('*.jpg'))),
-                }
+                "written_report_md": _generate_tactical_report(pipeline_summary),
+                "processing_info": {
+                    "sample_duration": sample_duration,
+                    "analysis_type": "full_soccer_analysis",
+                    "video_downloaded": video_info["video_path"],
+                    "frames_extracted": len(list(frames_dir.glob("*.jpg"))),
+                },
             }
-            
+
             # Save comprehensive result
-            result_path = output_dir / 'youtube_analysis.json'
-            with result_path.open('w', encoding='utf-8') as f:
+            result_path = output_dir / "youtube_analysis.json"
+            with result_path.open("w", encoding="utf-8") as f:
                 json.dump(result, f, indent=2)
-            
+
             LOGGER.info("Full soccer analysis complete: %s", result_path)
             return result
-            
+
         finally:
             # Clean up downloaded video
             if video_path.exists():
                 video_path.unlink()
                 LOGGER.info("Cleaned up downloaded video: %s", video_path)
-                
+
     except Exception as e:
         LOGGER.error("YouTube analysis failed: %s", e)
         raise RuntimeError(f"YouTube analysis failed: {e}") from e
@@ -806,19 +822,19 @@ def process_youtube_video(
 def _is_valid_youtube_url(url: str) -> bool:
     """Check if URL is a valid YouTube URL."""
     import re
-    
+
     youtube_patterns = [
-        r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/',
-        r'(https?://)?(www\.)?youtube\.com/watch\?v=',
-        r'(https?://)?youtu\.be/',
+        r"(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/",
+        r"(https?://)?(www\.)?youtube\.com/watch\?v=",
+        r"(https?://)?youtu\.be/",
     ]
-    
+
     return any(re.match(pattern, url) for pattern in youtube_patterns)
 
 
 def _extract_frames_from_video(video_path: Path, output_dir: Path, max_frames: int = 30) -> None:
     """Extract frames from video file.
-    
+
     Args:
         video_path: Path to video file
         output_dir: Directory to save frames
@@ -826,44 +842,46 @@ def _extract_frames_from_video(video_path: Path, output_dir: Path, max_frames: i
     """
     try:
         import cv2
-        
+
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video file: {video_path}")
-        
+
         cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
+
         # Calculate frame interval for desired number of frames
         if max_frames > 0 and total_frames > max_frames:
             frame_interval = total_frames // max_frames
         else:
             frame_interval = 1
-        
+
         frame_count = 0
         saved_count = 0
-        
+
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-            
+
             # Save frame at specified intervals
             if frame_count % frame_interval == 0:
-                frame_filename = output_dir / f'frame_{saved_count:06d}.jpg'
+                frame_filename = output_dir / f"frame_{saved_count:06d}.jpg"
                 cv2.imwrite(frame_filename.as_posix(), frame)
                 saved_count += 1
-                
+
                 if max_frames > 0 and saved_count >= max_frames:
                     break
-            
+
             frame_count += 1
-        
+
         cap.release()
         LOGGER.info("Extracted %d frames from video", saved_count)
-        
+
     except ImportError:
-        raise ImportError("OpenCV required for frame extraction. Install with: pip install opencv-python")
+        raise ImportError(
+            "OpenCV required for frame extraction. Install with: pip install opencv-python"
+        )
     except Exception as e:
         raise RuntimeError(f"Frame extraction failed: {e}") from e
 
@@ -871,70 +889,72 @@ def _extract_frames_from_video(video_path: Path, output_dir: Path, max_frames: i
 def _detect_competition_from_title(title: str) -> str | None:
     """Detect soccer competition from video title."""
     title_lower = title.lower()
-    
+
     competitions = {
-        'world cup': ['world cup', 'copa mundial', 'mundial'],
-        'champions league': ['champions league', 'liga de campeones', 'ucl'],
-        'premier league': ['premier league', 'epl'],
-        'laliga': ['laliga', 'la liga', 'liga española'],
-        'serie a': ['serie a', 'italian league'],
-        'bundesliga': ['bundesliga', 'german league'],
-        'copa del rey': ['copa del rey', 'spanish cup'],
-        'fa cup': ['fa cup', 'english cup'],
-        'europa league': ['europa league', 'uel'],
+        "world cup": ["world cup", "copa mundial", "mundial"],
+        "champions league": ["champions league", "liga de campeones", "ucl"],
+        "premier league": ["premier league", "epl"],
+        "laliga": ["laliga", "la liga", "liga española"],
+        "serie a": ["serie a", "italian league"],
+        "bundesliga": ["bundesliga", "german league"],
+        "copa del rey": ["copa del rey", "spanish cup"],
+        "fa cup": ["fa cup", "english cup"],
+        "europa league": ["europa league", "uel"],
     }
-    
+
     for competition, keywords in competitions.items():
         if any(keyword in title_lower for keyword in keywords):
             return competition
-    
+
     return None
 
 
 def _extract_events_from_analysis(pipeline_summary: PipelineSummary) -> list:
     """Extract key events from pipeline analysis."""
     events = []
-    
+
     # This is a simplified event extraction
     # In a full implementation, this would analyze the tracklets and detections
     # to identify shots, goals, passes, etc.
-    
+
     if pipeline_summary.total_detections > 0:
-        events.append({
-            't_start': 0,
-            't_end': 0,
-            'type': 'general_play',
-            'team': 'unknown',
-            'players': pipeline_summary.unique_track_ids[:5],  # First 5 players
-            'notes': 'General gameplay with active player tracking',
-        })
-    
+        events.append(
+            {
+                "t_start": 0,
+                "t_end": 0,
+                "type": "general_play",
+                "team": "unknown",
+                "players": pipeline_summary.unique_track_ids[:5],  # First 5 players
+                "notes": "General gameplay with active player tracking",
+            }
+        )
+
     return events
 
 
 def _analyze_players_from_tracks(pipeline_summary: PipelineSummary) -> dict:
     """Analyze individual players from track data."""
     players = {}
-    
+
     # Simplified player analysis
     # In a full implementation, this would analyze tracklets for each player
     for track_id in pipeline_summary.unique_track_ids:
         players[f"Player_{track_id}"] = {
-            'role': 'unknown',  # Would be determined from position analysis
-            'touches': 0,  # Would be calculated from track data
-            'prog_carries': 0,
-            'key_passes': 0,
-            'shots': 0,
-            'def_actions': 0,
-            'impact': {
-                'possession': 50,
-                'creation': 50,
-                'defending': 50,
-                'transition': 50,
+            "role": "unknown",  # Would be determined from position analysis
+            "touches": 0,  # Would be calculated from track data
+            "prog_carries": 0,
+            "key_passes": 0,
+            "shots": 0,
+            "def_actions": 0,
+            "impact": {
+                "possession": 50,
+                "creation": 50,
+                "defending": 50,
+                "transition": 50,
             },
-            'notable_moments': [],
+            "notable_moments": [],
         }
-    
+
     return players
 
 
@@ -942,19 +962,19 @@ def _calculate_team_metrics(pipeline_summary: PipelineSummary) -> dict:
     """Calculate team-level metrics."""
     # Simplified team metrics
     # In a full implementation, this would analyze team formations and play patterns
-    
+
     return {
-        'ppda_proxy': {
-            'Team A': 12.5,
-            'Team B': 14.2,
+        "ppda_proxy": {
+            "Team A": 12.5,
+            "Team B": 14.2,
         },
-        'field_tilt': 0.52,
-        'possession_percentage': {
-            'Team A': 52,
-            'Team B': 48,
+        "field_tilt": 0.52,
+        "possession_percentage": {
+            "Team A": 52,
+            "Team B": 48,
         },
-        'total_detections': pipeline_summary.total_detections,
-        'active_players': len(pipeline_summary.unique_track_ids),
+        "total_detections": pipeline_summary.total_detections,
+        "active_players": len(pipeline_summary.unique_track_ids),
     }
 
 
@@ -985,7 +1005,7 @@ This analysis processed {pipeline_summary.total_frames} frames with {pipeline_su
 ---
 *Generated by FIFA Soccer DS Analytics Pipeline*
 """
-    
+
     return report
 
 
@@ -996,7 +1016,7 @@ def main() -> None:
             description="Run full detection + tracking + graph pipeline or YouTube analysis",
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         )
-        
+
         # Input mode selection
         input_group = parser.add_mutually_exclusive_group(required=True)
         input_group.add_argument(
@@ -1009,14 +1029,14 @@ def main() -> None:
             type=str,
             help="YouTube video URL for analysis",
         )
-        
+
         parser.add_argument(
             "--output-dir",
             type=str,
             default="outputs/analysis",
             help="Output directory for results",
         )
-        
+
         # YouTube-specific options
         parser.add_argument(
             "--sample-duration",
@@ -1029,7 +1049,7 @@ def main() -> None:
             action="store_true",
             help="Force full soccer analysis even if confidence is low",
         )
-        
+
         # Model options
         parser.add_argument("--weights", type=str, default="yolov8n.pt", help="YOLO weights file")
         parser.add_argument(
@@ -1095,7 +1115,7 @@ def main() -> None:
                 sample_duration=args.sample_duration,
                 force_full_analysis=args.force_full_analysis,
             )
-            
+
             # Print YouTube analysis summary
             print("\n" + "=" * 60)
             print("YOUTUBE ANALYSIS SUMMARY")
@@ -1104,13 +1124,13 @@ def main() -> None:
             print(f"Content Type: {result['type']}")
             print(f"Classification: {result['classification']['classification']}")
             print(f"Confidence: {result['confidence']:.2f}")
-            if result['type'] == 'soccer':
+            if result["type"] == "soccer":
                 print(f"Total Detections: {result['pipeline_summary']['total_detections']}")
                 print(f"Unique Players: {len(result['pipeline_summary']['unique_track_ids'])}")
                 print(f"Frames Processed: {result['pipeline_summary']['total_frames']}")
             print(f"Output: {args.output_dir}")
             print("=" * 60)
-            
+
         else:
             # Frame directory processing mode (existing functionality)
             LOGGER.info("Processing frames directory: %s", args.frames_dir)

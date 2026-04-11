@@ -33,8 +33,11 @@ class TestCORSConfiguration:
 
         # Verify specific origins are whitelisted
         assert len(ALLOWED_ORIGINS) > 0
-        assert all(origin.startswith("http://") or origin.startswith("https://")
-                   for origin in ALLOWED_ORIGINS if origin)
+        assert all(
+            origin.startswith("http://") or origin.startswith("https://")
+            for origin in ALLOWED_ORIGINS
+            if origin
+        )
 
     def test_cors_environment_variable_origins(self):
         """Test that CORS origins can be extended via environment variable."""
@@ -43,16 +46,20 @@ class TestCORSConfiguration:
 
         try:
             # Set environment variable with additional origin
-            os.environ["CORS_ALLOWED_ORIGINS"] = "https://production-app.com,https://staging-app.com"
+            os.environ["CORS_ALLOWED_ORIGINS"] = (
+                "https://production-app.com,https://staging-app.com"
+            )
 
             # Re-import to pick up the environment variable
             import importlib
 
             import src.api.main
+
             importlib.reload(src.api.main)
 
             # Verify the origins list includes the new origins
             from src.api.main import ALLOWED_ORIGINS
+
             assert "https://production-app.com" in ALLOWED_ORIGINS
             assert "https://staging-app.com" in ALLOWED_ORIGINS
 
@@ -67,6 +74,7 @@ class TestCORSConfiguration:
             import importlib
 
             import src.api.main
+
             importlib.reload(src.api.main)
 
     def test_cors_middleware_is_configured(self):
@@ -90,7 +98,7 @@ class TestRateLimiting:
         from src.api.main import app, limiter
 
         # Verify limiter is attached to app
-        assert hasattr(app.state, 'limiter')
+        assert hasattr(app.state, "limiter")
         assert app.state.limiter is limiter
 
     def test_api_has_rate_limit_handler(self):
@@ -121,7 +129,7 @@ class TestSecurityConfiguration:
 
         # The function should have rate limit info attached
         # slowapi attaches _rate_limit_string attribute to decorated functions
-        assert hasattr(analyze_video, '__wrapped__') or callable(analyze_video)
+        assert hasattr(analyze_video, "__wrapped__") or callable(analyze_video)
 
     def test_app_has_startup_event(self):
         """Test that app has startup event for initialization."""
@@ -155,12 +163,12 @@ class TestAPISecurityBestPractices:
             # Clear env var to test default
             os.environ.pop("YT_DLP_SKIP_SSL", None)
             downloader = YouTubeDownloader()
-            assert downloader.ydl_opts.get('nocheckcertificate', False) is False
+            assert downloader.ydl_opts.get("nocheckcertificate", False) is False
 
             # Test that env var can override
             os.environ["YT_DLP_SKIP_SSL"] = "1"
             downloader2 = YouTubeDownloader()
-            assert downloader2.ydl_opts.get('nocheckcertificate', False) is True
+            assert downloader2.ydl_opts.get("nocheckcertificate", False) is True
         finally:
             if original_env:
                 os.environ["YT_DLP_SKIP_SSL"] = original_env

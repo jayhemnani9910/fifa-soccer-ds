@@ -60,6 +60,7 @@ def signal_handler(signum, frame):
     LOGGER.info("Received signal %s, initiating graceful shutdown...", signum)
     shutdown_requested = True
 
+
 @dataclass(slots=True)
 class TrackerRuntimeConfig:
     min_confidence: float = 0.25
@@ -154,7 +155,7 @@ def run_live_pipeline(config: LivePipelineConfig) -> None:
             if shutdown_requested:
                 LOGGER.info("Graceful shutdown requested, stopping pipeline...")
                 break
-                
+
             loop_start = time.time()
             ret, frame = capture.read()
             if not ret or frame is None:

@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 # Memory management for TensorRT operations
 _trt_lock = threading.Lock()
 
+
 @contextmanager
 def _trt_memory_manager():
     """Context manager for TensorRT memory operations with proper cleanup."""
@@ -34,54 +35,55 @@ def _trt_memory_manager():
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-            
+
             # Force garbage collection
             gc.collect()
-            
+
             yield
-            
+
         finally:
             # Cleanup after operation
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-            
+
             # Force garbage collection again
             gc.collect()
 
+
 class TensorRTMemoryManager:
     """Manages TensorRT object lifecycle and GPU memory cleanup."""
-    
+
     def __init__(self):
         self._objects: dict[str, Any] = {}
         self._logger = logging.getLogger(self.__class__.__name__)
-    
+
     def register_object(self, name: str, obj: Any) -> None:
         """Register a TensorRT object for cleanup."""
         self._objects[name] = obj
         self._logger.debug(f"Registered TensorRT object: {name}")
-    
+
     def cleanup_object(self, name: str) -> None:
         """Clean up a specific TensorRT object."""
         if name in self._objects:
             obj = self._objects.pop(name)
             try:
                 # Call cleanup if available
-                if hasattr(obj, '__del__'):
+                if hasattr(obj, "__del__"):
                     obj.__del__()
                 del obj
                 self._logger.debug(f"Cleaned up TensorRT object: {name}")
             except Exception as e:
                 self._logger.warning(f"Error cleaning up {name}: {e}")
-    
+
     def cleanup_all(self) -> None:
         """Clean up all registered TensorRT objects."""
         for name in list(self._objects.keys()):
             self.cleanup_object(name)
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cleanup_all()
 
@@ -157,18 +159,18 @@ def build_engine(
         try:
             # Create builder, network, and parser with proper tracking
             logger = tensorrt.Logger(tensorrt.Logger.WARNING)
-            mem_mgr.register_object('logger', logger)
-            
+            mem_mgr.register_object("logger", logger)
+
             builder = tensorrt.Builder(logger)
-            mem_mgr.register_object('builder', builder)
-            
+            mem_mgr.register_object("builder", builder)
+
             network = builder.create_network(
                 1 << int(tensorrt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
             )
-            mem_mgr.register_object('network', network)
-            
+            mem_mgr.register_object("network", network)
+
             parser = tensorrt.OnnxParser(network, logger)
-            mem_mgr.register_object('parser', parser)
+            mem_mgr.register_object("parser", parser)
 
             # Parse ONNX model
             with onnx_file.open("rb") as f:
@@ -178,7 +180,7 @@ def build_engine(
 
             # Configure builder with memory tracking
             config = builder.create_builder_config()
-            mem_mgr.register_object('config', config)
+            mem_mgr.register_object("config", config)
             config.set_memory_pool_limit(tensorrt.MemoryPoolType.WORKSPACE, workspace_size)
 
             if fp16:
@@ -192,27 +194,27 @@ def build_engine(
             # Build engine
             log.info("Building engine... this may take a minute")
             engine = builder.build_serialized_network(network, config)
-            
+
             # Clean up intermediate objects before saving
-            mem_mgr.cleanup_object('config')
-            mem_mgr.cleanup_object('network')
-            mem_mgr.cleanup_object('parser')
-            mem_mgr.cleanup_object('builder')
-            mem_mgr.cleanup_object('logger')
-            
+            mem_mgr.cleanup_object("config")
+            mem_mgr.cleanup_object("network")
+            mem_mgr.cleanup_object("parser")
+            mem_mgr.cleanup_object("builder")
+            mem_mgr.cleanup_object("logger")
+
             if engine is None:
                 raise RuntimeError("Failed to build TensorRT engine")
 
             # Save engine
             with output_file.open("wb") as f:
                 f.write(engine)
-            
+
             # Clean up engine object
             del engine
-            
+
             log.info("Engine written to %s (%d MB)", output_file, output_file.stat().st_size >> 20)
             return output_file
-            
+
         except Exception as e:
             log.error(f"TensorRT engine build failed: {e}")
             # Ensure cleanup happens even on error
@@ -245,74 +247,74 @@ def export_trt(config: TensorRTExportConfig) -> Path:
                 int8=config.int8,
                 workspace_size=config.workspace_size,
             )
-            
+
             # Final cleanup after successful build
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-            
+
             gc.collect()
-            
+
             return result
-            
+
         except Exception as e:
             log.error(f"TensorRT export failed: {e}")
             # Ensure cleanup happens on error
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-            
+
             gc.collect()
             raise
 
 
 def export_batch_trt(configs: list[TensorRTExportConfig]) -> list[Path]:
     """Export multiple TensorRT engines with memory management between exports.
-    
+
     Args:
         configs: List of TensorRTExportConfig objects
-        
+
     Returns:
         List of paths to generated .plan files
-        
+
     Raises:
         RuntimeError: If any export fails
     """
     results = []
     failed_exports = []
-    
+
     log.info(f"Starting batch export of {len(configs)} TensorRT engines")
-    
+
     for i, config in enumerate(configs):
         try:
-            log.info(f"Processing export {i+1}/{len(configs)}: {config.onnx_path}")
-            
+            log.info(f"Processing export {i + 1}/{len(configs)}: {config.onnx_path}")
+
             # Export with memory management
             result = export_trt(config)
             results.append(result)
-            
+
             # Force cleanup between exports to prevent memory accumulation
             with _trt_memory_manager():
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
                 gc.collect()
-            
-            log.info(f"✓ Export {i+1} completed: {result}")
-            
+
+            log.info(f"✓ Export {i + 1} completed: {result}")
+
         except Exception as e:
-            log.error(f"✗ Export {i+1} failed for {config.onnx_path}: {e}")
+            log.error(f"✗ Export {i + 1} failed for {config.onnx_path}: {e}")
             failed_exports.append((config.onnx_path, str(e)))
-            
+
             # Continue with next exports but track failures
             continue
-    
+
     if failed_exports:
         error_msg = f"Failed to export {len(failed_exports)} engines:\n"
         for path, error in failed_exports:
             error_msg += f"  - {path}: {error}\n"
         raise RuntimeError(error_msg)
-    
+
     log.info(f"✓ Batch export completed successfully: {len(results)} engines")
     return results
 
@@ -335,11 +337,12 @@ if __name__ == "__main__":
     if args.batch and args.batch_config:
         # Batch export mode
         import json
+
         with open(args.batch_config) as f:
             batch_configs = json.load(f)
-        
+
         configs = [TensorRTExportConfig(**cfg) for cfg in batch_configs]
-        
+
         try:
             results = export_batch_trt(configs)
             log.info("✓ Batch TensorRT export completed successfully")

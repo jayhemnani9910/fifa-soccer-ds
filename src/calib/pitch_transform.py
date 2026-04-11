@@ -24,6 +24,7 @@ PITCH_WIDTH = 68.0  # meters
 @dataclass(slots=True)
 class PitchCoordinates:
     """Coordinates in pitch space."""
+
     x: float  # 0 = own goal line, 1 = opponent goal line (normalized)
     y: float  # 0 = left touchline, 1 = right touchline (normalized)
     x_meters: float = 0.0
@@ -50,7 +51,7 @@ class PitchCoordinateTransformer:
         mode: Literal["manual", "auto", "identity"] = "identity",
         image_shape: tuple[int, int] | None = None,
         pitch_length: float = PITCH_LENGTH,
-        pitch_width: float = PITCH_WIDTH
+        pitch_width: float = PITCH_WIDTH,
     ) -> None:
         self.mode = mode
         self.image_shape = image_shape or (1080, 1920)  # Default HD
@@ -72,7 +73,7 @@ class PitchCoordinateTransformer:
         matrix: np.ndarray,
         image_shape: tuple[int, int],
         pitch_length: float = PITCH_LENGTH,
-        pitch_width: float = PITCH_WIDTH
+        pitch_width: float = PITCH_WIDTH,
     ) -> PitchCoordinateTransformer:
         """Create transformer from a 3x3 homography matrix.
 
@@ -89,7 +90,7 @@ class PitchCoordinateTransformer:
             mode="manual",
             image_shape=image_shape,
             pitch_length=pitch_length,
-            pitch_width=pitch_width
+            pitch_width=pitch_width,
         )
         transformer._homography_matrix = np.asarray(matrix)
         transformer._inverse_matrix = np.linalg.inv(transformer._homography_matrix)
@@ -102,7 +103,7 @@ class PitchCoordinateTransformer:
         world_points: list[tuple[float, float]],
         image_shape: tuple[int, int],
         pitch_length: float = PITCH_LENGTH,
-        pitch_width: float = PITCH_WIDTH
+        pitch_width: float = PITCH_WIDTH,
     ) -> PitchCoordinateTransformer:
         """Create transformer from corresponding keypoint pairs.
 
@@ -138,9 +139,7 @@ class PitchCoordinateTransformer:
 
         LOGGER.info("Computed homography from %d keypoints", len(image_points))
 
-        return cls.from_homography_matrix(
-            matrix, image_shape, pitch_length, pitch_width
-        )
+        return cls.from_homography_matrix(matrix, image_shape, pitch_length, pitch_width)
 
     @classmethod
     def from_saved_calibration(cls, path: Path) -> PitchCoordinateTransformer:
@@ -164,9 +163,7 @@ class PitchCoordinateTransformer:
 
         LOGGER.info("Loaded calibration from %s", path)
 
-        return cls.from_homography_matrix(
-            matrix, image_shape, pitch_length, pitch_width
-        )
+        return cls.from_homography_matrix(matrix, image_shape, pitch_length, pitch_width)
 
     def save_calibration(self, path: Path) -> None:
         """Save calibration to JSON file.
@@ -192,10 +189,7 @@ class PitchCoordinateTransformer:
 
         LOGGER.info("Saved calibration to %s", path)
 
-    def pixel_to_pitch(
-        self,
-        pixel_point: tuple[float, float]
-    ) -> PitchCoordinates:
+    def pixel_to_pitch(self, pixel_point: tuple[float, float]) -> PitchCoordinates:
         """Convert pixel coordinates to pitch coordinates.
 
         Args:
@@ -208,10 +202,7 @@ class PitchCoordinateTransformer:
 
         if self.mode == "manual" and self._homography_matrix is not None:
             # Apply homography transformation
-            world_point = self._apply_homography(
-                np.array([px, py]),
-                self._homography_matrix
-            )
+            world_point = self._apply_homography(np.array([px, py]), self._homography_matrix)
             x_meters, y_meters = world_point
 
             # Normalize to [0, 1]
@@ -229,16 +220,11 @@ class PitchCoordinateTransformer:
             y_meters = y_norm * self.pitch_width
 
         return PitchCoordinates(
-            x=float(x_norm),
-            y=float(y_norm),
-            x_meters=float(x_meters),
-            y_meters=float(y_meters)
+            x=float(x_norm), y=float(y_norm), x_meters=float(x_meters), y_meters=float(y_meters)
         )
 
     def pitch_to_pixel(
-        self,
-        pitch_point: tuple[float, float],
-        use_meters: bool = False
+        self, pitch_point: tuple[float, float], use_meters: bool = False
     ) -> tuple[float, float]:
         """Convert pitch coordinates to pixel coordinates.
 
@@ -257,10 +243,7 @@ class PitchCoordinateTransformer:
             y = y * self.pitch_width
 
         if self.mode == "manual" and self._inverse_matrix is not None:
-            pixel_point = self._apply_homography(
-                np.array([x, y]),
-                self._inverse_matrix
-            )
+            pixel_point = self._apply_homography(np.array([x, y]), self._inverse_matrix)
             return float(pixel_point[0]), float(pixel_point[1])
         else:
             # Identity mode - simple denormalization
@@ -269,11 +252,7 @@ class PitchCoordinateTransformer:
             py = (y / self.pitch_width) * height
             return float(px), float(py)
 
-    def bbox_to_pitch_position(
-        self,
-        bbox: list[float],
-        use_foot_point: bool = True
-    ) -> np.ndarray:
+    def bbox_to_pitch_position(self, bbox: list[float], use_foot_point: bool = True) -> np.ndarray:
         """Convert bounding box to pitch position.
 
         Args:
@@ -298,10 +277,7 @@ class PitchCoordinateTransformer:
         return np.array([coords.x, coords.y], dtype=np.float32)
 
     def compute_velocity(
-        self,
-        positions: list[np.ndarray],
-        frame_ids: list[int],
-        fps: float = 30.0
+        self, positions: list[np.ndarray], frame_ids: list[int], fps: float = 30.0
     ) -> np.ndarray:
         """Compute velocity from position history.
 
@@ -339,10 +315,7 @@ class PitchCoordinateTransformer:
         return velocity.astype(np.float32)
 
     @staticmethod
-    def _apply_homography(
-        point: np.ndarray,
-        matrix: np.ndarray
-    ) -> np.ndarray:
+    def _apply_homography(point: np.ndarray, matrix: np.ndarray) -> np.ndarray:
         """Apply homography transformation to a point.
 
         Args:

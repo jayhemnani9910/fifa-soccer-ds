@@ -61,48 +61,48 @@ class TestPipelineErrorHandling:
         with tempfile.TemporaryDirectory() as tmp_dir:
             frames_dir = Path(tmp_dir)
             output_dir = Path(tmp_dir) / "output"
-            
+
             with pytest.raises(ValueError, match="No frame files found"):
                 process_frames_directory(
                     frames_dir=frames_dir,
                     output_dir=output_dir,
                 )
 
-    @patch('src.pipeline_full.cv2')
+    @patch("src.pipeline_full.cv2")
     def test_opencv_not_available(self, mock_cv2):
         """Test handling when OpenCV is not available."""
         mock_cv2.imread.return_value = None
-        
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             frames_dir = Path(tmp_dir)
             output_dir = Path(tmp_dir) / "output"
-            
+
             # Create a dummy frame file
             (frames_dir / "frame_001.jpg").touch()
-            
+
             # Should not raise error, but should log warning
             summary = process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
                 config=PipelineConfig(max_frames=1),
             )
-            
+
             assert summary.total_frames == 1
             assert summary.total_detections == 0
 
-    @patch('src.pipeline_full.load_model')
+    @patch("src.pipeline_full.load_model")
     def test_model_loading_failure(self, mock_load_model):
         """Test handling of model loading failure."""
         mock_load_model.side_effect = Exception("Model loading failed")
-        
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             frames_dir = Path(tmp_dir)
             output_dir = Path(tmp_dir) / "output"
-            
+
             # Create dummy frame files
             for i in range(3):
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
-            
+
             with pytest.raises(RuntimeError, match="Model loading failed"):
                 process_frames_directory(
                     frames_dir=frames_dir,
@@ -110,19 +110,19 @@ class TestPipelineErrorHandling:
                     config=PipelineConfig(max_frames=3),
                 )
 
-    @patch('src.pipeline_full.ByteTrackRuntime')
+    @patch("src.pipeline_full.ByteTrackRuntime")
     def test_tracker_initialization_failure(self, mock_tracker):
         """Test handling of tracker initialization failure."""
         mock_tracker.side_effect = Exception("Tracker init failed")
-        
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             frames_dir = Path(tmp_dir)
             output_dir = Path(tmp_dir) / "output"
-            
+
             # Create dummy frame files
             for i in range(3):
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
-            
+
             with pytest.raises(RuntimeError, match="Tracker initialization failed"):
                 process_frames_directory(
                     frames_dir=frames_dir,
@@ -135,11 +135,11 @@ class TestPipelineErrorHandling:
         with tempfile.TemporaryDirectory() as tmp_dir:
             frames_dir = Path(tmp_dir)
             output_dir = Path("/root/forbidden/output")  # Likely inaccessible
-            
+
             # Create dummy frame files
             for i in range(3):
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
-            
+
             with pytest.raises(OSError):
                 process_frames_directory(
                     frames_dir=frames_dir,
@@ -147,26 +147,26 @@ class TestPipelineErrorHandling:
                     config=PipelineConfig(max_frames=3),
                 )
 
-    @patch('src.pipeline_full.mlflow')
+    @patch("src.pipeline_full.mlflow")
     def test_mlflow_logging_failure(self, mock_mlflow):
         """Test graceful handling of MLflow logging failure."""
         mock_mlflow.start_run.side_effect = Exception("MLflow connection failed")
-        
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             frames_dir = Path(tmp_dir)
             output_dir = Path(tmp_dir) / "output"
-            
+
             # Create dummy frame files
             for i in range(3):
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
-            
+
             # Should not raise error, but should continue without MLflow
             summary = process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
                 config=PipelineConfig(max_frames=3),
             )
-            
+
             assert summary.total_frames == 3
 
     def test_pipeline_summary_serialization(self):
@@ -174,28 +174,33 @@ class TestPipelineErrorHandling:
         with tempfile.TemporaryDirectory() as tmp_dir:
             frames_dir = Path(tmp_dir)
             output_dir = Path(tmp_dir) / "output"
-            
+
             # Create dummy frame files
             for i in range(3):
                 (frames_dir / f"frame_{i:03d}.jpg").touch()
-            
+
             process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
                 config=PipelineConfig(max_frames=3),
             )
-            
+
             # Verify summary file exists and is valid JSON
             summary_file = output_dir / "pipeline_summary.json"
             assert summary_file.exists()
-            
-            with summary_file.open('r') as f:
+
+            with summary_file.open("r") as f:
                 data = json.load(f)
-            
+
             # Verify required fields
             required_fields = [
-                "total_frames", "total_detections", "unique_track_ids",
-                "num_unique_tracks", "graph_nodes", "graph_edges", "config"
+                "total_frames",
+                "total_detections",
+                "unique_track_ids",
+                "num_unique_tracks",
+                "graph_nodes",
+                "graph_edges",
+                "config",
             ]
             for field in required_fields:
                 assert field in data, f"Missing field: {field}"
@@ -207,7 +212,7 @@ class TestConfigurationValidation:
     def test_default_configuration(self):
         """Test that default configuration is valid."""
         config = PipelineConfig()
-        
+
         assert 0 <= config.confidence <= 1
         assert 0 <= config.min_confidence <= 1
         assert config.distance_threshold > 0
@@ -228,7 +233,7 @@ class TestConfigurationValidation:
         assert config.min_confidence == 0.0
         assert config.max_frames == 0
         assert config.max_age == 0
-        
+
         # Test maximum reasonable values
         config = PipelineConfig(
             confidence=1.0,

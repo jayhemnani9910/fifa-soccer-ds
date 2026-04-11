@@ -10,6 +10,6 @@ from .video_downloader import YouTubeDownloader
 
 __all__ = [
     "YouTubeDownloader",
-    "AudioExtractor", 
+    "AudioExtractor",
     "YouTubeMetadataParser",
 ]

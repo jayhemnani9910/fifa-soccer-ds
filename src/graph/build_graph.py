@@ -60,7 +60,7 @@ def build_track_graph(
         if total_nodes > 1000:  # Prevent memory explosion
             logger.warning(f"Too many nodes ({total_nodes}), truncating for memory safety")
             break
-            
+
         for track in frame.items:
             node_idx = len(nodes)
             tensor = _bbox_to_tensor(track.bbox)
@@ -89,17 +89,19 @@ def build_track_graph(
     if distance_threshold > 0:
         threshold_sq = distance_threshold**2
         spatial_edges_added = 0
-        
+
         for _frame_id, node_indices in frame_to_nodes.items():
             if len(node_indices) > 50:  # Skip dense frames
-                logger.warning(f"Skipping spatial edges for dense frame with {len(node_indices)} nodes")
+                logger.warning(
+                    f"Skipping spatial edges for dense frame with {len(node_indices)} nodes"
+                )
                 continue
-                
+
             for idx_a, idx_b in combinations(node_indices, 2):
                 if spatial_edges_added >= max_spatial_edges:
                     logger.warning(f"Reached max spatial edges limit ({max_spatial_edges})")
                     break
-                    
+
                 center_a = _center(nodes[idx_a])
                 center_b = _center(nodes[idx_b])
                 distance_sq = torch.sum((center_a - center_b) ** 2).item()
@@ -107,7 +109,7 @@ def build_track_graph(
                     edges.append((idx_a, idx_b))
                     edges.append((idx_b, idx_a))
                     spatial_edges_added += 2
-            
+
             if spatial_edges_added >= max_spatial_edges:
                 break
 
@@ -138,14 +140,14 @@ def build_track_graph_optimized(
 ):
     """
     Memory-optimized graph construction using vectorized operations.
-    
+
     This function prevents memory explosion by:
     1. Limiting nodes per frame
     2. Using vectorized distance computation
     3. Early termination on edge limits
     4. Sparse adjacency representation
     """
-    
+
     if not track_windows:
         raise ValueError("track_windows must contain at least one frame.")
 
@@ -153,34 +155,34 @@ def build_track_graph_optimized(
         raise ImportError("PyTorch is required to build graphs.")
 
     active = track_windows[-window:]
-    
+
     # Collect all nodes with limits
     all_nodes = []
     all_meta = []
     node_lookup = {}
     frame_to_nodes = {}
-    
+
     node_counter = 0
     for frame in active:
         frame_nodes = []
         frame_tracks = frame.items[:max_nodes_per_frame]  # Limit nodes
-        
+
         for track in frame_tracks:
             tensor = _bbox_to_tensor(track.bbox)
             all_nodes.append(tensor)
             all_meta.append((frame.frame_id, track.track_id))
-            
+
             node_lookup[(frame.frame_id, track.track_id)] = node_counter
             frame_nodes.append(node_counter)
             node_counter += 1
-            
+
         frame_to_nodes[frame.frame_id] = frame_nodes
 
     if not all_nodes:
         empty_data = {
             "x": torch.empty((0, 4), dtype=torch.float32),
             "edge_index": torch.empty((2, 0), dtype=torch.long),
-            "meta": []
+            "meta": [],
         }
         if Data is None:
             return empty_data
@@ -201,35 +203,33 @@ def build_track_graph_optimized(
                         if current_idx is not None:
                             edges.append((last_idx, current_idx))
                             edges.append((current_idx, last_idx))
-                
+
                 track_last_seen[track.track_id] = (
-                    frame.frame_id, 
-                    node_lookup.get((frame.frame_id, track.track_id))
+                    frame.frame_id,
+                    node_lookup.get((frame.frame_id, track.track_id)),
                 )
 
     # Build spatial edges with vectorized computation
     if distance_threshold > 0:
-        threshold_sq = distance_threshold ** 2
-        
+        threshold_sq = distance_threshold**2
+
         for _frame_id, node_indices in frame_to_nodes.items():
             if len(node_indices) <= 1:
                 continue
-                
+
             # Get centers for this frame
-            centers = torch.stack([
-                _center(x[node_idx]) for node_idx in node_indices
-            ])
-            
+            centers = torch.stack([_center(x[node_idx]) for node_idx in node_indices])
+
             # Vectorized pairwise distance computation
             if len(centers) > 0:
                 # Compute all pairwise distances
                 diff = centers.unsqueeze(1) - centers.unsqueeze(0)
-                dist_matrix = torch.sum(diff ** 2, dim=2)
-                
+                dist_matrix = torch.sum(diff**2, dim=2)
+
                 # Find pairs within threshold (upper triangle)
                 mask = (dist_matrix <= threshold_sq) & (dist_matrix > 0)
                 pairs = torch.nonzero(mask, as_tuple=False)
-                
+
                 # Add edges
                 for i, j in pairs:
                     if i < j:  # Upper triangle only
@@ -248,10 +248,10 @@ def build_track_graph_optimized(
     num_nodes = len(all_nodes)
     num_edges = len(edges)
     memory_mb = (x.numel() * 4 + edge_index.numel() * 4) / (1024 * 1024)
-    
+
     logger.info(
         f"Optimized graph: {num_nodes} nodes, {num_edges} edges, "
-        f"{memory_mb:.2f}MB, avg_degree: {num_edges/max(1, num_nodes):.1f}"
+        f"{memory_mb:.2f}MB, avg_degree: {num_edges / max(1, num_nodes):.1f}"
     )
 
     if Data is None:
@@ -263,11 +263,11 @@ def build_track_graph_optimized(
 def estimate_graph_memory(num_nodes: int, avg_degree: float = 5.0) -> dict:
     """
     Estimate memory usage for graph construction.
-    
+
     Args:
         num_nodes: Number of nodes in graph
         avg_degree: Average node degree (typical: 3-8 for soccer)
-        
+
     Returns:
         Dictionary with memory estimates in MB
     """
@@ -276,16 +276,16 @@ def estimate_graph_memory(num_nodes: int, avg_degree: float = 5.0) -> dict:
     node_memory = num_nodes * 4 * 4  # 4 features * 4 bytes
     edge_memory = num_edges * 2 * 4  # 2 indices * 4 bytes
     total_memory_mb = (node_memory + edge_memory) / (1024 * 1024)
-    
+
     # Dense representation for comparison
     dense_edges = num_nodes * (num_nodes - 1) // 2
     dense_memory_mb = (node_memory + dense_edges * 2 * 4) / (1024 * 1024)
-    
+
     return {
         "nodes": num_nodes,
         "sparse_edges": num_edges,
         "dense_edges": dense_edges,
         "sparse_memory_mb": total_memory_mb,
         "dense_memory_mb": dense_memory_mb,
-        "memory_ratio": dense_memory_mb / max(0.1, total_memory_mb)
+        "memory_ratio": dense_memory_mb / max(0.1, total_memory_mb),
     }

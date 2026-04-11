@@ -36,10 +36,13 @@ LOGGER = logging.getLogger(__name__)
 def get_git_hash() -> str:
     """Get current git commit hash."""
     try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
 
@@ -53,7 +56,7 @@ def get_dataset_version(dataset_path: Path) -> str:
             return f"dvc_{file_hash}"
     except Exception:
         pass
-    
+
     # Fallback to file modification time
     try:
         if dataset_path.exists():
@@ -61,50 +64,50 @@ def get_dataset_version(dataset_path: Path) -> str:
             return f"mtime_{int(mtime)}"
     except Exception:
         pass
-    
+
     return "unknown"
 
 
 def generate_experiment_name(
     model_type: str = "graphsage",
     dataset_path: Path | None = None,
-    custom_suffix: str | None = None
+    custom_suffix: str | None = None,
 ) -> str:
     """Generate unique MLflow experiment name to avoid collisions.
-    
+
     Args:
         model_type: Type of model being trained
         dataset_path: Path to dataset for versioning
         custom_suffix: Additional suffix for uniqueness
-        
+
     Returns:
         Unique experiment name string
     """
     git_hash = get_git_hash()
     date_str = datetime.utcnow().strftime("%Y%m%d")
-    
+
     # Build base name
     parts = ["fifa_gnn", model_type, date_str, git_hash]
-    
+
     # Add dataset version if available
     if dataset_path:
         dataset_version = get_dataset_version(dataset_path)
         parts.append(dataset_version)
-    
+
     # Add custom suffix if provided
     if custom_suffix:
         parts.append(custom_suffix)
-    
+
     # Join and ensure reasonable length
     experiment_name = "_".join(parts)
-    
+
     # Truncate if too long (MLflow has limits)
     if len(experiment_name) > 100:
         # Keep essential parts only
         experiment_name = f"fifa_gnn_{model_type}_{date_str}_{git_hash}"
         if custom_suffix:
             experiment_name += f"_{custom_suffix[:8]}"
-    
+
     return experiment_name
 
 
@@ -323,11 +326,9 @@ def run_training(
     if enable_mlflow:
         if experiment_name is None:
             experiment_name = generate_experiment_name(
-                model_type="graphsage",
-                dataset_path=dataset_path,
-                custom_suffix=f"epochs_{epochs}"
+                model_type="graphsage", dataset_path=dataset_path, custom_suffix=f"epochs_{epochs}"
             )
-        
+
         # Start MLflow run with comprehensive tracking
         start_run(
             experiment=experiment_name,
@@ -339,10 +340,10 @@ def run_training(
                 "device": device_obj.type,
                 "epochs": str(epochs),
                 "batch_size": str(batch_size),
-                "learning_rate": str(lr)
-            }
+                "learning_rate": str(lr),
+            },
         )
-        
+
         # Log training parameters
         training_params = {
             "epochs": epochs,
@@ -353,7 +354,7 @@ def run_training(
             "model_features": dataset.num_node_features,
             "model_classes": dataset.num_classes,
             "train_samples": len(train_subset),
-            "val_samples": len(val_subset)
+            "val_samples": len(val_subset),
         }
         log_run_params(training_params, prefix="training")
 
@@ -371,7 +372,7 @@ def run_training(
                 "train_loss": train_loss,
                 "val_acc": val_acc,
                 "val_f1": val_f1,
-                "epoch": epoch
+                "epoch": epoch,
             }
             log_run_metrics(epoch_metrics, step=epoch)
 
@@ -389,7 +390,7 @@ def run_training(
             save_checkpoint(
                 model, optimizer, epoch, {"val_acc": val_acc, "val_f1": val_f1}, checkpoint_path
             )
-            
+
             # Log best model as artifact if MLflow enabled
             if enable_mlflow and checkpoint_path:
                 log_run_artifacts(str(checkpoint_path), "best_model")
@@ -407,16 +408,18 @@ def run_training(
     # Log final metrics and artifacts
     if enable_mlflow:
         final_metrics = {
-            "final_train_loss": metrics_history["train_loss"][-1] if metrics_history["train_loss"] else 0,
+            "final_train_loss": metrics_history["train_loss"][-1]
+            if metrics_history["train_loss"]
+            else 0,
             "final_val_acc": metrics_history["val_acc"][-1] if metrics_history["val_acc"] else 0,
             "final_val_f1": metrics_history["val_f1"][-1] if metrics_history["val_f1"] else 0,
             "best_val_acc": max(metrics_history["val_acc"]) if metrics_history["val_acc"] else 0,
             "best_val_f1": max(metrics_history["val_f1"]) if metrics_history["val_f1"] else 0,
             "total_epochs": final_epoch,
-            "early_stopped": early_stopper.counter >= early_stopping_patience
+            "early_stopped": early_stopper.counter >= early_stopping_patience,
         }
         log_run_metrics(final_metrics)
-        
+
         # Log metrics history as artifact
         if checkpoint_path:
             metrics_path = checkpoint_path.parent / "training_metrics.json"
@@ -450,12 +453,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-metrics", default="metrics.json", help="Path to save training metrics."
     )
-    parser.add_argument(
-        "--experiment-name", default=None, help="Custom MLflow experiment name."
-    )
-    parser.add_argument(
-        "--no-mlflow", action="store_true", help="Disable MLflow tracking."
-    )
+    parser.add_argument("--experiment-name", default=None, help="Custom MLflow experiment name.")
+    parser.add_argument("--no-mlflow", action="store_true", help="Disable MLflow tracking.")
     return parser
 
 

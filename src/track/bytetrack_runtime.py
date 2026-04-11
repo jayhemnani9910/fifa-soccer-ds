@@ -171,20 +171,20 @@ class ByteTrackRuntime:
         self.max_age = max_age
         self.max_track_id = max_track_id
         self.id_reuse_delay = id_reuse_delay
-        
+
         # Enhanced ID management with reuse pool
         self._next_track_id = 0
         self._id_pool: deque[int] = deque()  # Reusable IDs
         self._id_release_time: dict[int, int] = {}  # Track when IDs become available
         self._tracks: list[_TrackState] = []
-        
+
         # Statistics for monitoring
         self._total_tracks_created = 0
         self._total_ids_reused = 0
 
     def update(self, frame_id: int, detections: Iterable[dict[str, Any]]) -> Tracklets:
         """Assign track IDs to detections using greedy matching."""
-        
+
         # Track current frame for ID reuse timing
         self._current_frame = frame_id
 
@@ -282,15 +282,15 @@ class ByteTrackRuntime:
             else:
                 # Release ID of expired track for reuse
                 self._release_track_id(track.track_id, frame_id)
-        
+
         self._tracks = active_tracks
 
         return Tracklets(frame_id=frame_id, items=outputs)
 
     def _allocate_track_id(self) -> int:
         """Allocate track ID with reuse and overflow protection."""
-        current_frame = getattr(self, '_current_frame', 0)
-        
+        current_frame = getattr(self, "_current_frame", 0)
+
         # Check for reusable IDs first
         if self._id_pool:
             # Check if enough time has passed for reuse
@@ -299,7 +299,7 @@ class ByteTrackRuntime:
                 release_time = self._id_release_time.get(track_id, 0)
                 if current_frame - release_time >= self.id_reuse_delay:
                     reusable_ids.append(track_id)
-            
+
             if reusable_ids:
                 # Use the oldest reusable ID
                 track_id = reusable_ids[0]
@@ -307,7 +307,7 @@ class ByteTrackRuntime:
                 del self._id_release_time[track_id]
                 self._total_ids_reused += 1
                 return track_id
-        
+
         # Allocate new ID if no reusable ones available
         if self._next_track_id < self.max_track_id:
             track_id = self._next_track_id
@@ -324,23 +324,23 @@ class ByteTrackRuntime:
                 self._next_track_id = 0
                 track_id = self._next_track_id
                 self._next_track_id += 1
-        
+
         self._total_tracks_created += 1
         return track_id
-    
+
     def _release_track_id(self, track_id: int, current_frame: int) -> None:
         """Release track ID back to pool after delay."""
         if track_id not in self._id_pool:
             self._id_pool.append(track_id)
             self._id_release_time[track_id] = current_frame
-            
+
             # Limit pool size to prevent memory leaks
             max_pool_size = min(100, self.max_track_id // 10)
             while len(self._id_pool) > max_pool_size:
                 old_id = self._id_pool.popleft()
                 if old_id in self._id_release_time:
                     del self._id_release_time[old_id]
-    
+
     def get_id_statistics(self) -> dict[str, Any]:
         """Get ID management statistics for monitoring."""
         return {

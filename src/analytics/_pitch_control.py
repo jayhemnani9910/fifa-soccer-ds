@@ -31,6 +31,7 @@ PITCH_WIDTH = 68.0  # meters (standard pitch)
 @dataclass(slots=True)
 class PlayerState:
     """State of a player at a given frame."""
+
     player_id: int
     team_id: int  # 0 = home, 1 = away, -1 = unknown/ball
     position: np.ndarray  # (x, y) in meters or normalized coordinates
@@ -40,6 +41,7 @@ class PlayerState:
 @dataclass(slots=True)
 class PitchControlResult:
     """Result of pitch control computation for a frame."""
+
     frame_id: int
     grid: np.ndarray  # Shape (grid_y, grid_x) - values in [0, 1] for home team control
     home_control_pct: float = 0.0  # Percentage of pitch controlled by home team
@@ -49,6 +51,7 @@ class PitchControlResult:
 @dataclass(slots=True)
 class PitchControlConfig:
     """Configuration for pitch control calculation."""
+
     max_speed: float = DEFAULT_MAX_SPEED
     reaction_time: float = DEFAULT_REACTION_TIME
     sigma: float = DEFAULT_SIGMA
@@ -70,26 +73,20 @@ class PitchControlModel:
     """
 
     def __init__(
-        self,
-        grid_shape: tuple[int, int] = (12, 16),
-        config: PitchControlConfig | None = None
+        self, grid_shape: tuple[int, int] = (12, 16), config: PitchControlConfig | None = None
     ) -> None:
         self.grid_shape = grid_shape
         self.config = config or PitchControlConfig()
 
         # Pre-compute grid coordinates (normalized 0-1)
         self._grid_y, self._grid_x = np.meshgrid(
-            np.linspace(0, 1, grid_shape[0]),
-            np.linspace(0, 1, grid_shape[1]),
-            indexing='ij'
+            np.linspace(0, 1, grid_shape[0]), np.linspace(0, 1, grid_shape[1]), indexing="ij"
         )
         # Stack for vectorized operations: shape (grid_y, grid_x, 2)
         self._grid_coords = np.stack([self._grid_x, self._grid_y], axis=-1)
 
     def compute(
-        self,
-        frame_id: int,
-        players: list[PlayerState] | None = None
+        self, frame_id: int, players: list[PlayerState] | None = None
     ) -> PitchControlResult:
         """Compute pitch control for a frame.
 
@@ -131,15 +128,15 @@ class PitchControlModel:
 
         LOGGER.debug(
             "Computed pitch control for frame %s: home=%.1f%%, away=%.1f%%",
-            frame_id, home_control_pct, away_control_pct
+            frame_id,
+            home_control_pct,
+            away_control_pct,
         )
 
         return PitchControlResult(frame_id, grid, home_control_pct, away_control_pct)
 
     def _compute_control_grid(
-        self,
-        home_players: list[PlayerState],
-        away_players: list[PlayerState]
+        self, home_players: list[PlayerState], away_players: list[PlayerState]
     ) -> np.ndarray:
         """Compute control probability grid using time-to-intercept model.
 
@@ -165,10 +162,7 @@ class PitchControlModel:
 
         return control_prob.astype(np.float32)
 
-    def _compute_team_arrival_times(
-        self,
-        players: list[PlayerState]
-    ) -> np.ndarray:
+    def _compute_team_arrival_times(self, players: list[PlayerState]) -> np.ndarray:
         """Compute arrival times for all players to all grid points.
 
         Returns:
@@ -217,7 +211,7 @@ class PitchControlModel:
             # Effective speed is max_speed adjusted by current velocity direction
             effective_speed = np.maximum(
                 self.config.max_speed * 0.5,  # minimum speed
-                self.config.max_speed + vel_component * 0.3  # velocity boost
+                self.config.max_speed + vel_component * 0.3,  # velocity boost
             )
             time_to_reach = self.config.reaction_time + distance / effective_speed
         else:
@@ -230,9 +224,4 @@ class PitchControlModel:
         return time_to_reach
 
 
-__all__ = [
-    "PitchControlModel",
-    "PitchControlResult",
-    "PitchControlConfig",
-    "PlayerState"
-]
+__all__ = ["PitchControlModel", "PitchControlResult", "PitchControlConfig", "PlayerState"]

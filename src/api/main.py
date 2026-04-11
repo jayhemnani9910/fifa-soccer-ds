@@ -38,7 +38,7 @@ app = FastAPI(
     description="REST API for analyzing YouTube videos for soccer content",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
 )
 
 # Attach limiter to app
@@ -48,16 +48,18 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # CORS Configuration
 # Define allowed origins - update this list for your deployment
 ALLOWED_ORIGINS = [
-    "http://localhost:3000",      # Local frontend development
-    "http://localhost:8080",      # Local alternative
-    "http://127.0.0.1:3000",      # Local frontend
-    "http://127.0.0.1:8080",      # Local alternative
+    "http://localhost:3000",  # Local frontend development
+    "http://localhost:8080",  # Local alternative
+    "http://127.0.0.1:3000",  # Local frontend
+    "http://127.0.0.1:8080",  # Local alternative
 ]
 
 # Add production origins from environment variable (comma-separated)
 _extra_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
 if _extra_origins:
-    ALLOWED_ORIGINS.extend([origin.strip() for origin in _extra_origins.split(",") if origin.strip()])
+    ALLOWED_ORIGINS.extend(
+        [origin.strip() for origin in _extra_origins.split(",") if origin.strip()]
+    )
 
 # Add CORS middleware with restricted origins
 app.add_middleware(
@@ -77,6 +79,7 @@ orchestrator: PipelineOrchestrator | None = None
 
 class AnalyzeRequest(BaseModel):
     """Request model for video analysis."""
+
     youtube_url: HttpUrl
     output_dir: str | None = None
     frame_rate: float = 1.0
@@ -88,6 +91,7 @@ class AnalyzeRequest(BaseModel):
 
 class AnalyzeResponse(BaseModel):
     """Response model for video analysis."""
+
     task_id: str
     status: str
     message: str
@@ -96,6 +100,7 @@ class AnalyzeResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Response model for health check."""
+
     status: str
     timestamp: datetime
     version: str
@@ -106,6 +111,7 @@ class HealthResponse(BaseModel):
 
 class TaskResponse(BaseModel):
     """Response model for task status."""
+
     task_id: str
     status: str
     progress: float
@@ -120,17 +126,17 @@ class TaskResponse(BaseModel):
 async def startup_event():
     """Initialize the API service."""
     global orchestrator
-    
+
     logger.info("Starting FIFA Soccer DS API service...")
-    
+
     try:
         # Initialize pipeline orchestrator
         orchestrator = await create_pipeline_orchestrator()
         logger.info("Pipeline orchestrator initialized successfully")
-        
+
         # Log startup completion
         logger.info("API service startup completed")
-        
+
     except Exception as e:
         logger.error(f"Failed to initialize API service: {e}")
         raise
@@ -144,7 +150,7 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
     }
 
 
@@ -155,23 +161,24 @@ async def health_endpoint():
         # Get system metrics
         system_metrics = get_system_metrics()
         gpu_memory = get_gpu_memory_usage()
-        
+
         # Check pipeline health
         pipeline_health = health_check()
-        
+
         # Count active tasks
-        active_tasks = sum(1 for task in task_storage.values() 
-                          if task.status in ["pending", "processing"])
-        
+        active_tasks = sum(
+            1 for task in task_storage.values() if task.status in ["pending", "processing"]
+        )
+
         return HealthResponse(
-            status="healthy" if pipeline_health['status'] == 'healthy' else 'degraded',
+            status="healthy" if pipeline_health["status"] == "healthy" else "degraded",
             timestamp=datetime.now(),
             version="1.0.0",
             system_metrics=system_metrics,
             gpu_memory=gpu_memory,
-            active_tasks=active_tasks
+            active_tasks=active_tasks,
         )
-        
+
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=503, detail="Service unhealthy")
@@ -183,11 +190,13 @@ async def analyze_video(request: Request, req: AnalyzeRequest, background_tasks:
     """Start video analysis task."""
     if orchestrator is None:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
-    
+
     try:
         # Generate task ID
-        task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hash(str(req.youtube_url)) % 10000}"
-        
+        task_id = (
+            f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hash(str(req.youtube_url)) % 10000}"
+        )
+
         # Create analysis request
         analysis_request = YouTubeAnalysisRequest(
             url=str(req.youtube_url),
@@ -196,9 +205,9 @@ async def analyze_video(request: Request, req: AnalyzeRequest, background_tasks:
             max_duration=req.max_duration,
             include_audio=req.include_audio,
             confidence_threshold=req.confidence_threshold,
-            force_full_analysis=req.force_full_analysis
+            force_full_analysis=req.force_full_analysis,
         )
-        
+
         # Create task status
         task_status = TaskStatus(
             task_id=task_id,
@@ -206,27 +215,25 @@ async def analyze_video(request: Request, req: AnalyzeRequest, background_tasks:
             message="Task created",
             progress=0.0,
             created_at=datetime.now(),
-            updated_at=datetime.now()
+            updated_at=datetime.now(),
         )
-        
+
         # Store task
         task_storage[task_id] = task_status
-        
+
         # Add background task
-        background_tasks.add_task(
-            process_video_analysis, task_id, analysis_request
-        )
-        
+        background_tasks.add_task(process_video_analysis, task_id, analysis_request)
+
         # Estimate processing duration (rough estimate)
         estimated_duration = 30.0 + (req.max_duration or 300) * 0.1
-        
+
         return AnalyzeResponse(
             task_id=task_id,
             status="pending",
             message="Analysis task started",
-            estimated_duration=estimated_duration
+            estimated_duration=estimated_duration,
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to start analysis: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -237,9 +244,9 @@ async def get_task_status(task_id: str):
     """Get status of analysis task."""
     if task_id not in task_storage:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
     task = task_storage[task_id]
-    
+
     return TaskResponse(
         task_id=task.task_id,
         status=task.status,
@@ -248,28 +255,28 @@ async def get_task_status(task_id: str):
         created_at=task.created_at,
         updated_at=task.updated_at,
         results=task.results.dict() if task.results else None,
-        error_details=task.error_details
+        error_details=task.error_details,
     )
 
 
 @app.get("/tasks", response_model=list[TaskResponse])
 async def list_tasks(
     status: str | None = Query(None, description="Filter by status"),
-    limit: int = Query(50, ge=1, le=100, description="Maximum number of tasks to return")
+    limit: int = Query(50, ge=1, le=100, description="Maximum number of tasks to return"),
 ):
     """List analysis tasks."""
     tasks = list(task_storage.values())
-    
+
     # Filter by status if specified
     if status:
         tasks = [task for task in tasks if task.status == status]
-    
+
     # Sort by creation time (newest first)
     tasks.sort(key=lambda x: x.created_at, reverse=True)
-    
+
     # Limit results
     tasks = tasks[:limit]
-    
+
     return [
         TaskResponse(
             task_id=task.task_id,
@@ -279,7 +286,7 @@ async def list_tasks(
             created_at=task.created_at,
             updated_at=task.updated_at,
             results=task.results.dict() if task.results else None,
-            error_details=task.error_details
+            error_details=task.error_details,
         )
         for task in tasks
     ]
@@ -290,17 +297,17 @@ async def cancel_task(task_id: str):
     """Cancel a running analysis task."""
     if task_id not in task_storage:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
     task = task_storage[task_id]
-    
+
     if task.status in ["completed", "error", "cancelled"]:
         raise HTTPException(status_code=400, detail=f"Cannot cancel task in status: {task.status}")
-    
+
     # Update task status
     task.status = "cancelled"
     task.message = "Task cancelled by user"
     task.updated_at = datetime.now()
-    
+
     return {"message": f"Task {task_id} cancelled"}
 
 
@@ -310,21 +317,21 @@ async def get_metrics():
     try:
         system_metrics = get_system_metrics()
         gpu_memory = get_gpu_memory_usage()
-        
+
         # Count tasks by status
         task_counts = {}
         for task in task_storage.values():
             status = task.status
             task_counts[status] = task_counts.get(status, 0) + 1
-        
+
         return {
             "system_metrics": system_metrics,
             "gpu_memory_bytes": gpu_memory,
             "task_counts": task_counts,
             "total_tasks": len(task_storage),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to get metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -335,7 +342,7 @@ async def get_pipeline_info():
     """Get pipeline configuration and information."""
     if orchestrator is None:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
-    
+
     return {
         "pipeline_version": orchestrator.config.get("pipeline", {}).get("version", "1.0.0"),
         "supported_formats": ["YouTube URLs"],
@@ -349,15 +356,17 @@ async def get_pipeline_info():
             "Soccer event detection",
             "Player tracking",
             "Graph analysis",
-            "Tactical analytics (pitch control, xT, OBSO)"
-        ]
+            "Tactical analytics (pitch control, xT, OBSO)",
+        ],
     }
 
 
 # ===== TACTICAL ANALYTICS ENDPOINTS =====
 
+
 class TacticalComputeRequest(BaseModel):
     """Request model for computing tactical metrics."""
+
     players: list[dict[str, Any]]  # List of {player_id, team_id, position: [x, y]}
     frame_id: int = 0
     grid_shape: list[int] = [12, 16]
@@ -365,6 +374,7 @@ class TacticalComputeRequest(BaseModel):
 
 class TacticalComputeResponse(BaseModel):
     """Response model for tactical computation."""
+
     frame_id: int
     pitch_control: dict[str, Any]
     obso: dict[str, Any]
@@ -405,12 +415,14 @@ async def compute_tactical_metrics(request: Request, req: TacticalComputeRequest
         # Convert request to PlayerState objects
         players = []
         for p in req.players:
-            players.append(PlayerState(
-                player_id=p["player_id"],
-                team_id=p["team_id"],
-                position=np.array(p["position"]),
-                velocity=np.array(p.get("velocity")) if p.get("velocity") else None
-            ))
+            players.append(
+                PlayerState(
+                    player_id=p["player_id"],
+                    team_id=p["team_id"],
+                    position=np.array(p["position"]),
+                    velocity=np.array(p.get("velocity")) if p.get("velocity") else None,
+                )
+            )
 
         # Compute tactical metrics
         result = analyzer.compute(req.frame_id, players)
@@ -426,7 +438,7 @@ async def compute_tactical_metrics(request: Request, req: TacticalComputeRequest
                 "grid": result.obso_grid.tolist() if result.obso_grid is not None else None,
                 "home_total": round(result.home_obso_total, 4),
                 "away_total": round(result.away_obso_total, 4),
-            }
+            },
         )
 
     except ImportError as e:
@@ -447,42 +459,38 @@ async def get_tactical_info():
                 "name": "pitch_control",
                 "description": "Probability that each team controls each area of the pitch",
                 "output_range": [0, 1],
-                "interpretation": "0 = away team controls, 1 = home team controls"
+                "interpretation": "0 = away team controls, 1 = home team controls",
             },
             {
                 "name": "expected_threat",
                 "description": "Expected goal probability from each pitch zone",
                 "output_range": [0, 0.5],
-                "interpretation": "Higher values near opponent goal"
+                "interpretation": "Higher values near opponent goal",
             },
             {
                 "name": "obso",
                 "description": "Off-Ball Scoring Opportunity (pitch_control * xT)",
                 "output_range": [0, 0.5],
-                "interpretation": "Where should attacking players position themselves"
-            }
+                "interpretation": "Where should attacking players position themselves",
+            },
         ],
         "parameters": {
             "grid_shape": {
                 "default": [12, 16],
-                "description": "Output grid dimensions (rows, columns)"
+                "description": "Output grid dimensions (rows, columns)",
             },
             "max_speed": {
                 "default": 5.0,
                 "unit": "m/s",
-                "description": "Maximum player running speed"
+                "description": "Maximum player running speed",
             },
             "reaction_time": {
                 "default": 0.7,
                 "unit": "seconds",
-                "description": "Time before player reacts"
+                "description": "Time before player reacts",
             },
-            "pitch_dimensions": {
-                "length": 105.0,
-                "width": 68.0,
-                "unit": "meters"
-            }
-        }
+            "pitch_dimensions": {"length": 105.0, "width": 68.0, "unit": "meters"},
+        },
     }
 
 
@@ -501,7 +509,7 @@ async def get_tactical_results(task_id: str):
     if not task.results:
         raise HTTPException(status_code=404, detail="No results available for this task")
 
-    results_dict = task.results.dict() if hasattr(task.results, 'dict') else task.results
+    results_dict = task.results.dict() if hasattr(task.results, "dict") else task.results
     tactical_data = results_dict.get("tactical_analytics")
 
     if not tactical_data:
@@ -515,35 +523,35 @@ async def process_video_analysis(task_id: str, request: YouTubeAnalysisRequest):
     task = task_storage.get(task_id)
     if not task:
         return
-    
+
     try:
         # Update task status
         task.status = "processing"
         task.message = "Starting video analysis"
         task.progress = 0.1
         task.updated_at = datetime.now()
-        
+
         logger.info(f"Starting analysis for task {task_id}")
-        
+
         # Process video
         result = await orchestrator.process_youtube_video(request)
-        
+
         # Update task status
         task.status = "completed"
         task.message = "Analysis completed successfully"
         task.progress = 1.0
         task.results = result
         task.updated_at = datetime.now()
-        
+
         logger.info(f"Analysis completed for task {task_id}")
-        
+
     except Exception as e:
         # Update task with error
         task.status = "error"
         task.message = f"Analysis failed: {str(e)}"
         task.error_details = str(e)
         task.updated_at = datetime.now()
-        
+
         logger.error(f"Analysis failed for task {task_id}: {e}")
 
 
@@ -557,9 +565,9 @@ async def http_exception_handler(request, exc):
             "error": {
                 "type": "http_exception",
                 "message": exc.detail,
-                "status_code": exc.status_code
+                "status_code": exc.status_code,
             }
-        }
+        },
     )
 
 
@@ -569,22 +577,11 @@ async def general_exception_handler(request, exc):
     logger.error(f"Unhandled exception: {exc}")
     return JSONResponse(
         status_code=500,
-        content={
-            "error": {
-                "type": "internal_error",
-                "message": "Internal server error"
-            }
-        }
+        content={"error": {"type": "internal_error", "message": "Internal server error"}},
     )
 
 
 if __name__ == "__main__":
     import uvicorn
-    
-    uvicorn.run(
-        "src.api.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+
+    uvicorn.run("src.api.main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")

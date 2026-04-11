@@ -36,6 +36,7 @@ __all__ = [
 @dataclass(slots=True)
 class TacticalConfig:
     """Configuration for tactical analysis."""
+
     grid_shape: tuple[int, int] = (12, 16)  # (rows, cols)
     max_speed: float = 5.0  # m/s
     reaction_time: float = 0.7  # seconds
@@ -49,6 +50,7 @@ class TacticalConfig:
 @dataclass
 class TacticalResult:
     """Complete tactical analysis result for a frame."""
+
     frame_id: int
     pitch_control: PitchControlResult
     xT_grid: np.ndarray | None = None
@@ -78,18 +80,12 @@ class TacticalAnalyzer:
             pitch_width=self.config.pitch_width,
             time_horizon=self.config.time_horizon,
         )
-        self.pitch_control = PitchControlModel(
-            grid_shape=self.config.grid_shape,
-            config=pc_config
-        )
+        self.pitch_control = PitchControlModel(grid_shape=self.config.grid_shape, config=pc_config)
 
         # Initialize xT grid (static expected threat values)
         self.xT_grid = self._create_default_xT_grid()
 
-        LOGGER.info(
-            "Initialized TacticalAnalyzer with grid shape %s",
-            self.config.grid_shape
-        )
+        LOGGER.info("Initialized TacticalAnalyzer with grid shape %s", self.config.grid_shape)
 
     def _create_default_xT_grid(self) -> np.ndarray:
         """Create default Expected Threat (xT) grid.
@@ -115,7 +111,7 @@ class TacticalAnalyzer:
                 y_center_dist = abs(y_norm - 0.5) * 2
 
                 # Base xT increases exponentially towards goal
-                base_xT = x_norm ** 3 * 0.25
+                base_xT = x_norm**3 * 0.25
 
                 # Bonus for central positions (near goal center)
                 central_bonus = (1 - y_center_dist) * 0.1 * x_norm
@@ -133,11 +129,7 @@ class TacticalAnalyzer:
 
         return xT
 
-    def compute(
-        self,
-        frame_id: int,
-        players: list[PlayerState] | None = None
-    ) -> TacticalResult:
+    def compute(self, frame_id: int, players: list[PlayerState] | None = None) -> TacticalResult:
         """Compute all tactical metrics for a frame.
 
         Args:
@@ -167,8 +159,7 @@ class TacticalAnalyzer:
         )
 
     def _compute_obso(
-        self,
-        pitch_control_grid: np.ndarray
+        self, pitch_control_grid: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, float, float]:
         """Compute Off-Ball Scoring Opportunities.
 
@@ -194,7 +185,7 @@ class TacticalAnalyzer:
         frame_id: int,
         tracklets_data: list[dict[str, Any]],
         team_assignments: dict[int, int] | None = None,
-        image_shape: tuple[int, int] | None = None
+        image_shape: tuple[int, int] | None = None,
     ) -> TacticalResult:
         """Compute tactical metrics from tracklet data.
 
@@ -241,12 +232,14 @@ class TacticalAnalyzer:
                 # Default: position-based (left = home)
                 team_id = 0 if pos_x < 0.5 else 1
 
-            players.append(PlayerState(
-                player_id=track_id,
-                team_id=team_id,
-                position=np.array([pos_x, pos_y]),
-                velocity=None
-            ))
+            players.append(
+                PlayerState(
+                    player_id=track_id,
+                    team_id=team_id,
+                    position=np.array([pos_x, pos_y]),
+                    velocity=None,
+                )
+            )
 
         return self.compute(frame_id, players)
 
@@ -269,10 +262,7 @@ class TacticalAnalyzer:
             },
         }
 
-    def get_aggregate_stats(
-        self,
-        results: list[TacticalResult]
-    ) -> dict[str, Any]:
+    def get_aggregate_stats(self, results: list[TacticalResult]) -> dict[str, Any]:
         """Compute aggregate statistics across multiple frames.
 
         Args:
