@@ -401,20 +401,6 @@ def _current_git_commit() -> str:
         return "unknown"
 
 
-def _increment_version(version_file: Path) -> int:
-    version_file.parent.mkdir(parents=True, exist_ok=True)
-    if version_file.exists():
-        try:
-            payload = json.loads(version_file.read_text())
-            version = int(payload.get("version", 0)) + 1
-        except (json.JSONDecodeError, ValueError, TypeError):
-            version = 1
-    else:
-        version = 1
-    version_file.write_text(json.dumps({"version": version}, indent=2))
-    return version
-
-
 def _increment_version_safe(version_file: Path) -> int:
     """Thread-safe version increment with file locking."""
     try:

@@ -378,7 +378,7 @@ class PipelineOrchestrator:
             video_id="unknown",
             title="YouTube Video",
             description="",
-            duration_seconds=0,
+            duration_seconds=1,
             channel_title="Unknown",
             channel_id="unknown",
             view_count=0,

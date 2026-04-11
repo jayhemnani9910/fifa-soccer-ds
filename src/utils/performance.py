@@ -11,7 +11,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, Generator, Optional
 
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
 import numpy as np
 
 LOGGER = logging.getLogger(__name__)
@@ -56,6 +60,7 @@ def performance_monitor(operation_name: str) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs) -> Any:
             # Get memory before operation
+            process = None
             try:
                 import psutil
                 process = psutil.Process()
@@ -63,15 +68,15 @@ def performance_monitor(operation_name: str) -> Callable:
             except ImportError:
                 memory_before = None
                 LOGGER.debug("psutil not available, memory monitoring disabled")
-            
+
             # Time the operation
             start_time = time.time()
             result = func(*args, **kwargs)
             end_time = time.time()
-            
+
             # Get memory after operation
             try:
-                memory_after = process.memory_info().rss
+                memory_after = process.memory_info().rss if process else None
             except Exception:
                 memory_after = None
             

@@ -9,13 +9,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 import time
 from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-import psutil
-import aiohttp
-import yaml
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -422,6 +435,7 @@ class HealthChecker:
 # Health check decorator for automatic monitoring
 def health_check(func):
     """Decorator to automatically add health check monitoring to functions."""
+    @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time = time.time()
         try:

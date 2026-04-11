@@ -172,7 +172,10 @@ def start_metrics_server(port: int = 8000) -> None:
     else:
         LOGGER.warning("prometheus_client not available, metrics server not started")
 
-# Convenience decorators
-timed_processing = timed(PROCESSING_TIME)
-timed_detection = timed(DETECTION_TIME) 
-timed_tracking = timed(TRACKING_TIME)
+# Convenience decorators (only available when prometheus_client is installed)
+if Counter and Gauge and Histogram:
+    timed_processing = timed(PROCESSING_TIME)
+    timed_detection = timed(DETECTION_TIME)
+    timed_tracking = timed(TRACKING_TIME)
+else:
+    timed_processing = timed_detection = timed_tracking = None

@@ -410,7 +410,6 @@ __all__ = [
     "validate_youtube_url",
     "sanitize_filename",
     "validate_video_duration",
-    "validate_detection_data",
     "validate_video_codec",
     "validate_audio_codec",
     "validate_fps",
