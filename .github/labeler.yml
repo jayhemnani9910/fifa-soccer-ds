@@ -1,0 +1,55 @@
+detection:
+  - changed-files:
+      - any-glob-to-any-file: "src/detect/**"
+
+tracking:
+  - changed-files:
+      - any-glob-to-any-file: "src/track/**"
+
+graph:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/graph/**"
+          - "src/models/**"
+
+api:
+  - changed-files:
+      - any-glob-to-any-file: "src/api/**"
+
+analytics:
+  - changed-files:
+      - any-glob-to-any-file: "src/analytics/**"
+
+streaming:
+  - changed-files:
+      - any-glob-to-any-file: "src/live/**"
+
+youtube:
+  - changed-files:
+      - any-glob-to-any-file: "src/youtube/**"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: "tests/**"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: ".github/**"
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "*.md"
+          - "docs/**"
+
+docker:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Dockerfile"
+          - "docker-compose*.yml"
+
+pipeline:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/pipeline_*.py"
+          - "dvc.yaml"
