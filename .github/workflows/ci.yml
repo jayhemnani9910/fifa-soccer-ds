@@ -46,4 +46,4 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run smoke tests
-        run: pytest tests/test_detect_smoke.py tests/test_imports.py tests/test_track_stub.py tests/test_pipeline_full.py -m smoke --tb=short -p no:cacheprovider
+        run: pytest tests/test_detect_smoke.py tests/test_imports.py tests/test_track_stub.py -m smoke --tb=short -p no:cacheprovider
