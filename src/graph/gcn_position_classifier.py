@@ -8,11 +8,28 @@ from typing import Any
 
 import torch
 from torch import nn
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
-from torch_geometric.nn import SAGEConv
+
+try:
+    from torch_geometric.data import Data
+    from torch_geometric.loader import DataLoader
+    from torch_geometric.nn import SAGEConv
+
+    _TG_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    Data = None  # type: ignore[assignment,misc]
+    DataLoader = None  # type: ignore[assignment,misc]
+    SAGEConv = None  # type: ignore[assignment,misc]
+    _TG_AVAILABLE = False
 
 from src.eval.metrics import f1_score
+
+
+def _require_torch_geometric() -> None:
+    if not _TG_AVAILABLE:
+        raise ImportError(
+            "torch-geometric is required for PositionClassifier; install with "
+            "`pip install torch-geometric`"
+        )
 
 
 class PositionClassifier(nn.Module):
@@ -27,6 +44,7 @@ class PositionClassifier(nn.Module):
         dropout: float = 0.2,
     ) -> None:
         super().__init__()
+        _require_torch_geometric()
         if num_layers < 1:
             raise ValueError("num_layers must be >= 1")
 
@@ -45,9 +63,9 @@ class PositionClassifier(nn.Module):
         self.classifier = nn.Linear(hidden_channels, num_classes)
 
     def forward(
-        self, data: Data | torch.Tensor, edge_index: torch.Tensor | None = None
+        self, data: "Data | torch.Tensor", edge_index: torch.Tensor | None = None
     ) -> torch.Tensor:
-        if isinstance(data, Data):
+        if Data is not None and isinstance(data, Data):
             x = data.x
             edge_index = data.edge_index if edge_index is None else edge_index
         else:
@@ -68,7 +86,7 @@ class PositionClassifier(nn.Module):
 
 
 def _evaluate(
-    model: PositionClassifier, loader: DataLoader, device: torch.device
+    model: PositionClassifier, loader: "DataLoader", device: torch.device
 ) -> dict[str, float]:
     model.eval()
     predictions: list[int] = []
@@ -88,8 +106,8 @@ def _evaluate(
 
 def train_loop(
     model: PositionClassifier,
-    train_loader: DataLoader,
-    val_loader: DataLoader | None = None,
+    train_loader: "DataLoader",
+    val_loader: "DataLoader | None" = None,
     epochs: int = 20,
     learning_rate: float = 1e-3,
     device: torch.device | None = None,
@@ -158,10 +176,11 @@ def export_checkpoint(
 
 
 def predict_positions(
-    graph_data: Data,
+    graph_data: "Data",
     weights_path: str | Path,
     device: torch.device | None = None,
 ) -> list[dict[str, Any]]:
+    _require_torch_geometric()
     """Load a PositionClassifier checkpoint and run inference on a graph.
 
     The checkpoint format is what ``export_checkpoint`` writes: a dict with
