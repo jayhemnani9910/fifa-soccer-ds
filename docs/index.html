@@ -3,113 +3,195 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FIFA Soccer DS — Computer Vision Pipeline</title>
-  <meta name="description" content="Production-ready computer vision pipeline for analyzing soccer gameplay and YouTube highlights. YOLOv8 + ByteTrack + GraphSAGE." />
+  <title>FIFA Soccer DS — Computer Vision Pipeline for Soccer Analytics</title>
+  <meta name="description" content="Production-ready CV pipeline: YOLOv8 detection + ByteTrack tracking + GraphSAGE GNN for soccer gameplay and YouTube highlights analysis." />
+  <meta property="og:title" content="FIFA Soccer DS — CV Pipeline for Soccer Analytics" />
+  <meta property="og:description" content="YOLOv8 + ByteTrack + GraphSAGE on real La Liga footage. 22 FPS on 8GB GPU." />
+  <meta property="og:image" content="assets/overlays/overlay_5.jpg" />
   <style>
     :root {
-      --bg: #0b0f14;
-      --bg-elev: #121821;
-      --bg-card: #18212c;
-      --border: #26313e;
-      --fg: #e6edf3;
-      --fg-dim: #9aa7b8;
+      --bg: #0a0e14;
+      --bg-elev: #111821;
+      --bg-card: #161f2b;
+      --border: #243042;
+      --border-strong: #2f3e55;
+      --fg: #e8eef6;
+      --fg-dim: #95a3b7;
+      --fg-faint: #6b7a8f;
       --accent: #22c55e;
       --accent-dim: #16803c;
-      --pitch: #22863a;
-      --code-bg: #0f1620;
+      --code-bg: #0d131c;
     }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+    *,*::before,*::after { box-sizing: border-box; }
+    html,body { margin:0; padding:0; background:var(--bg); color:var(--fg); }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.6;
+      line-height: 1.65;
       font-size: 16px;
+      -webkit-font-smoothing: antialiased;
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; font-family: "SF Mono", Menlo, Consolas, monospace; }
-    pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 0.85em; }
-    pre code { background: none; padding: 0; }
-    h1, h2, h3 { margin: 0 0 12px 0; font-weight: 600; letter-spacing: -0.02em; }
-    h2 { font-size: 1.6rem; margin-top: 56px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-    h3 { font-size: 1.1rem; margin-top: 24px; color: var(--fg-dim); text-transform: uppercase; font-size: 0.85rem; letter-spacing: 0.06em; }
+    code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; font-size: 0.88em; font-family: "SF Mono", Menlo, Consolas, monospace; color: #d1e4ff; }
+    pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px; overflow-x: auto; font-size: 0.85em; line-height: 1.55; }
+    pre code { background: none; padding: 0; color: inherit; }
+    h1,h2,h3,h4 { margin: 0 0 14px 0; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; }
+    h2 { font-size: 1.7rem; margin-top: 72px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+    h3 { font-size: 0.85rem; margin-top: 28px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; }
+    h4 { font-size: 1.05rem; margin: 0 0 6px 0; }
+    p { margin: 0 0 14px 0; color: var(--fg-dim); }
+    p.lead { color: var(--fg); font-size: 1.05rem; }
+    ul { color: var(--fg-dim); padding-left: 22px; }
+    ul li { margin-bottom: 6px; }
+
     .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px 96px; }
 
     /* Hero */
     header.hero {
-      padding: 96px 24px 64px;
+      padding: 112px 24px 80px;
       text-align: center;
-      background: radial-gradient(ellipse at top, rgba(34,197,94,0.08), transparent 60%);
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 0%, rgba(34,197,94,0.12), transparent 70%),
+        linear-gradient(180deg, transparent, rgba(10,14,20,0.6) 100%);
       border-bottom: 1px solid var(--border);
     }
-    .hero h1 { font-size: 3rem; margin-bottom: 16px; background: linear-gradient(180deg, #fff 0%, #9aa7b8 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
-    .hero .tagline { font-size: 1.15rem; color: var(--fg-dim); max-width: 720px; margin: 0 auto 28px; }
-    .hero .meta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; font-size: 0.9rem; color: var(--fg-dim); }
-    .hero .meta .pill { background: var(--bg-elev); border: 1px solid var(--border); padding: 6px 14px; border-radius: 999px; }
-    .hero .meta .pill strong { color: var(--fg); font-weight: 600; }
-    .hero .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 32px; }
-    .btn { padding: 10px 20px; border-radius: 8px; font-weight: 500; font-size: 0.95rem; border: 1px solid var(--border); transition: all 0.15s ease; display: inline-flex; align-items: center; gap: 8px; }
-    .btn.primary { background: var(--accent); color: #06140c; border-color: var(--accent); }
-    .btn.primary:hover { background: #4ade80; text-decoration: none; }
+    .hero-inner { max-width: 780px; margin: 0 auto; }
+    .hero .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: 0.12em; font-size: 0.8rem; margin-bottom: 20px; font-weight: 600; }
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.4rem);
+      margin-bottom: 20px;
+      background: linear-gradient(180deg, #ffffff 0%, #8ea0b7 110%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      letter-spacing: -0.03em;
+    }
+    .hero .tagline { font-size: 1.15rem; color: var(--fg-dim); margin: 0 auto 32px; }
+    .hero .meta { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .hero .meta .pill { background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.25); padding: 6px 14px; border-radius: 999px; font-size: 0.85rem; color: var(--fg); }
+    .hero .meta .pill strong { color: var(--accent); font-weight: 600; }
+    .hero .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 36px; }
+    .btn { padding: 11px 22px; border-radius: 8px; font-weight: 500; font-size: 0.95rem; border: 1px solid var(--border-strong); transition: transform 0.12s ease, background 0.12s ease; display: inline-flex; align-items: center; gap: 8px; }
+    .btn:hover { text-decoration: none; transform: translateY(-1px); }
+    .btn.primary { background: var(--accent); color: #06140c; border-color: var(--accent); font-weight: 600; }
+    .btn.primary:hover { background: #4ade80; }
     .btn.ghost { background: var(--bg-elev); color: var(--fg); }
-    .btn.ghost:hover { background: var(--bg-card); text-decoration: none; }
+    .btn.ghost:hover { background: var(--bg-card); }
 
-    /* Feature grid */
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; margin: 24px 0; }
+    /* Cards / grid */
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 24px 0; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; margin: 24px 0; }
     .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
-    .card h3 { margin-top: 0; color: var(--accent); text-transform: none; letter-spacing: normal; font-size: 1.05rem; }
-    .card p { margin: 0; color: var(--fg-dim); font-size: 0.95rem; }
+    .card h4 { color: var(--accent); margin-bottom: 8px; }
+    .card p { margin: 0; font-size: 0.95rem; }
 
-    /* Gallery */
-    .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin: 24px 0; }
-    .gallery figure { margin: 0; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-    .gallery img { width: 100%; height: auto; display: block; }
-    .gallery figcaption { padding: 12px 16px; font-size: 0.85rem; color: var(--fg-dim); border-top: 1px solid var(--border); }
+    /* Before / after gallery */
+    .pair { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 20px; }
+    .pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+    .pair-cell { position: relative; }
+    .pair-cell img { width: 100%; height: auto; display: block; }
+    .pair-cell .label {
+      position: absolute; top: 12px; left: 12px;
+      background: rgba(10,14,20,0.85); backdrop-filter: blur(8px);
+      color: var(--fg); padding: 4px 10px; border-radius: 6px;
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em;
+      border: 1px solid var(--border);
+    }
+    .pair-cell .label.out { border-color: rgba(34,197,94,0.4); color: var(--accent); }
+    .pair-cell + .pair-cell { border-left: 1px solid var(--border); }
+    .pair-caption { padding: 14px 20px; font-size: 0.9rem; color: var(--fg-dim); border-top: 1px solid var(--border); }
+    @media (max-width: 640px) {
+      .pair-grid { grid-template-columns: 1fr; }
+      .pair-cell + .pair-cell { border-left: none; border-top: 1px solid var(--border); }
+    }
 
     /* Stats */
-    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin: 24px 0; }
-    .stat { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; text-align: center; }
-    .stat .num { font-size: 2rem; font-weight: 700; color: var(--accent); }
-    .stat .lbl { font-size: 0.85rem; color: var(--fg-dim); margin-top: 4px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; margin: 24px 0; }
+    .stat { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 22px 16px; text-align: center; }
+    .stat .num { font-size: 2.2rem; font-weight: 700; color: var(--accent); line-height: 1; }
+    .stat .lbl { font-size: 0.8rem; color: var(--fg-dim); margin-top: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
 
     /* Tech pills */
     .tech { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
-    .tech span { background: var(--bg-elev); border: 1px solid var(--border); padding: 4px 12px; border-radius: 6px; font-size: 0.85rem; color: var(--fg-dim); }
-
-    /* Footer */
-    footer { text-align: center; padding: 48px 24px; border-top: 1px solid var(--border); color: var(--fg-dim); font-size: 0.9rem; margin-top: 96px; }
+    .tech span { background: var(--bg-elev); border: 1px solid var(--border); padding: 5px 12px; border-radius: 6px; font-size: 0.85rem; color: var(--fg-dim); }
 
     /* Diagram */
     .diagram { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; overflow-x: auto; }
-    .diagram pre { background: none; border: none; padding: 0; color: var(--fg); font-size: 0.8rem; line-height: 1.5; }
+    .diagram pre { background: none; border: none; padding: 0; color: var(--fg); font-size: 0.8rem; }
 
-    @media (max-width: 640px) {
-      .hero h1 { font-size: 2.2rem; }
-      header.hero { padding: 64px 16px 48px; }
-      h2 { font-size: 1.3rem; margin-top: 40px; }
-    }
+    /* Split cards for JSON */
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 24px 0; }
+    @media (max-width: 780px) { .split { grid-template-columns: 1fr; } }
+    .split h4 { color: var(--fg); margin-bottom: 10px; }
+    .split pre { margin: 0; font-size: 0.78rem; max-height: 340px; overflow-y: auto; }
+
+    footer { text-align: center; padding: 56px 24px; border-top: 1px solid var(--border); color: var(--fg-faint); font-size: 0.88rem; margin-top: 96px; }
+    footer p { color: inherit; }
+    footer a { color: var(--fg-dim); }
   </style>
 </head>
 <body>
 
 <header class="hero">
-  <h1>FIFA Soccer DS</h1>
-  <p class="tagline">Production-ready computer vision pipeline for analyzing soccer gameplay and YouTube highlights. Multi-model tracking with YOLOv8 detection, ByteTrack persistence, and a GraphSAGE scaffold for tactical pattern recognition.</p>
-  <div class="meta">
-    <span class="pill"><strong>22 FPS</strong> on 8GB GPU</span>
-    <span class="pill"><strong>YouTube + FIFA</strong> dual-source</span>
-    <span class="pill"><strong>Live RTSP</strong> streaming</span>
-  </div>
-  <div class="cta">
-    <a class="btn primary" href="https://github.com/jayhemnani9910/fifa-soccer-ds">View on GitHub</a>
-    <a class="btn ghost" href="https://github.com/jayhemnani9910/fifa-soccer-ds#quickstart">Quickstart</a>
+  <div class="hero-inner">
+    <div class="eyebrow">Computer Vision · MLOps · Sports Analytics</div>
+    <h1>FIFA Soccer DS</h1>
+    <p class="tagline">Production-ready pipeline that turns raw soccer footage into structured tactical data. YOLOv8 detection → ByteTrack tracking → spatial-temporal graph → GraphSAGE role classification, all wired into FastAPI with MLflow experiment tracking.</p>
+    <div class="meta">
+      <span class="pill"><strong>22 FPS</strong> on 8GB GPU</span>
+      <span class="pill"><strong>YouTube + FIFA</strong> dual-source</span>
+      <span class="pill"><strong>Live RTSP</strong> streaming</span>
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/jayhemnani9910/fifa-soccer-ds">View on GitHub →</a>
+      <a class="btn ghost" href="https://github.com/jayhemnani9910/fifa-soccer-ds#quickstart">Quickstart</a>
+    </div>
   </div>
 </header>
 
 <main class="wrap">
 
-  <h2>What it does</h2>
-  <p>Ingests video (YouTube URL, local file, or RTSP stream) and runs a four-stage pipeline: YOLOv8 object detection, ByteTrack multi-object tracking with Kalman filtering, spatial-temporal graph construction, and GraphSAGE GNN inference for player role classification. Every stage logs to MLflow and emits structured JSON for downstream analytics.</p>
+  <h2>See it in action</h2>
+  <p class="lead">Real La Liga broadcast footage (Barcelona vs Real Madrid) processed end-to-end through the pipeline. Raw frames on the left, detection + tracking overlays on the right — green bounding boxes with persistent track IDs and COCO class labels.</p>
+
+  <div class="pair">
+    <div class="pair-grid">
+      <div class="pair-cell"><span class="label">Input</span><img src="assets/inputs/input_1.jpg" alt="Raw broadcast frame 1" loading="lazy"></div>
+      <div class="pair-cell"><span class="label out">Detection + Tracking</span><img src="assets/overlays/overlay_1.jpg" alt="Detection overlay 1" loading="lazy"></div>
+    </div>
+    <div class="pair-caption">Close-up shot — single player isolated with a clean bounding box and persistent track ID across the broadcast cut.</div>
+  </div>
+
+  <div class="pair">
+    <div class="pair-grid">
+      <div class="pair-cell"><span class="label">Input</span><img src="assets/inputs/input_5.jpg" alt="Raw broadcast frame 2" loading="lazy"></div>
+      <div class="pair-cell"><span class="label out">Detection + Tracking</span><img src="assets/overlays/overlay_5.jpg" alt="Detection overlay 2" loading="lazy"></div>
+    </div>
+    <div class="pair-caption">Wide shot — 10 players tracked simultaneously. Team classification clusters jersey colors automatically (Barça blue vs Madrid white). Scoreboard ignored.</div>
+  </div>
+
+  <div class="pair">
+    <div class="pair-grid">
+      <div class="pair-cell"><span class="label">Input</span><img src="assets/inputs/input_10.jpg" alt="Raw broadcast frame 3" loading="lazy"></div>
+      <div class="pair-cell"><span class="label out">Detection + Tracking</span><img src="assets/overlays/overlay_10.jpg" alt="Detection overlay 3" loading="lazy"></div>
+    </div>
+    <div class="pair-caption">Mid-play dynamics — Kalman filter handles brief occlusions up to ~20 frames; IDs remain stable through motion.</div>
+  </div>
+
+  <div class="pair">
+    <div class="pair-grid">
+      <div class="pair-cell"><span class="label">Input</span><img src="assets/inputs/input_15.jpg" alt="Raw broadcast frame 4" loading="lazy"></div>
+      <div class="pair-cell"><span class="label out">Detection + Tracking</span><img src="assets/overlays/overlay_15.jpg" alt="Detection overlay 4" loading="lazy"></div>
+    </div>
+    <div class="pair-caption">Defensive formation — spatial graph edges link nearby players per frame; temporal edges link the same player across frames for GNN input.</div>
+  </div>
+
+  <h3>Run statistics</h3>
+  <p>20 frames sampled at 2 FPS from a Barça vs Madrid highlight reel, processed with <code>confidence=0.4</code>, <code>max_age=20</code>, per-class IoU-NMS at 0.6, and a 35%-of-frame area clamp.</p>
+  <div class="stats">
+    <div class="stat"><div class="num">220</div><div class="lbl">Detections</div></div>
+    <div class="stat"><div class="num">34</div><div class="lbl">Unique tracks</div></div>
+    <div class="stat"><div class="num">211</div><div class="lbl">Graph nodes</div></div>
+    <div class="stat"><div class="num">422</div><div class="lbl">Graph edges</div></div>
+  </div>
 
   <h2>Pipeline architecture</h2>
   <div class="diagram"><pre>┌─────────────────┐     ┌──────────────┐     ┌──────────────┐
@@ -128,70 +210,109 @@
                     │  Tracking     │     │  Tactical Analysis│
                     └───────────────┘     └──────────────────┘</pre></div>
 
-  <h2>Detection &amp; tracking output</h2>
-  <p>Sample frames from a real La Liga match processed end-to-end. Green boxes are tracked detections; labels show persistent track IDs and COCO class names. Team classification clusters jersey colors automatically.</p>
-  <div class="gallery">
-    <figure><img src="assets/overlays/sample_1.jpg" alt="Detection overlay frame 1" loading="lazy"><figcaption>Frame 1 — close-up detection with persistent track IDs across broadcast cuts.</figcaption></figure>
-    <figure><img src="assets/overlays/sample_2.jpg" alt="Detection overlay frame 2" loading="lazy"><figcaption>Frame 5 — wide shot, 10 players tracked, team colors auto-clustered (Barça blue / Madrid white).</figcaption></figure>
-    <figure><img src="assets/overlays/sample_3.jpg" alt="Detection overlay frame 3" loading="lazy"><figcaption>Frame 10 — mid-play dynamics; tracker handles occlusions with 20-frame Kalman memory.</figcaption></figure>
-    <figure><img src="assets/overlays/sample_4.jpg" alt="Detection overlay frame 4" loading="lazy"><figcaption>Frame 15 — defensive formation; spatial graph edges link nearby players per frame.</figcaption></figure>
-  </div>
+  <h2>What the pipeline outputs</h2>
+  <p>A full run writes structured JSON plus visual overlays, ready for downstream analytics or dashboarding. The summary below is from the run that produced the frames above.</p>
 
-  <h3>Run stats (real La Liga footage, 20 frames)</h3>
-  <div class="stats">
-    <div class="stat"><div class="num">220</div><div class="lbl">Detections</div></div>
-    <div class="stat"><div class="num">34</div><div class="lbl">Unique tracks</div></div>
-    <div class="stat"><div class="num">211</div><div class="lbl">Graph nodes</div></div>
-    <div class="stat"><div class="num">422</div><div class="lbl">Graph edges</div></div>
+  <div class="split">
+    <div class="card">
+      <h4>pipeline_summary.json</h4>
+      <pre><code>{
+  "total_frames": 20,
+  "total_detections": 220,
+  "num_unique_tracks": 34,
+  "graph_nodes": 211,
+  "graph_edges": 422,
+  "config": {
+    "weights": "yolov8n.pt",
+    "confidence": 0.4,
+    "min_confidence": 0.4,
+    "distance_threshold": 120.0,
+    "max_age": 20,
+    "graph_window": 30
+  },
+  "tactical_analytics": {
+    "enabled": true,
+    "avg_home_control_pct": 57.88,
+    "avg_away_control_pct": 42.12,
+    "team_assignments": { "...": "..." }
+  }
+}</code></pre>
+    </div>
+    <div class="card">
+      <h4>detections/frame_000005.json</h4>
+      <pre><code>{
+  "frame_id": 4,
+  "frame_name": "frame_000005.jpg",
+  "num_detections": 9,
+  "detections": [
+    {
+      "bbox": [729.8, 19.6, 1252.6, 710.7],
+      "confidence": 0.950,
+      "class_id": 0,
+      "class_name": "person"
+    },
+    {
+      "bbox": [406.8, 380.8, 754.3, 712.0],
+      "confidence": 0.564,
+      "class_id": 0,
+      "class_name": "person"
+    },
+    { "...": "..." }
+  ]
+}</code></pre>
+    </div>
   </div>
 
   <h2>Key features</h2>
-  <div class="grid">
+  <div class="grid-3">
     <div class="card">
-      <h3>Detection &amp; tracking</h3>
-      <p>Stock YOLOv8n (COCO) with soccer-tuned tracking params. ByteTrack + Kalman filtering handles occlusions up to ~20 frames. Per-class NMS + area-ratio filtering suppresses spurious bboxes.</p>
+      <h4>Detection &amp; tracking</h4>
+      <p>Stock YOLOv8n (COCO) with soccer-tuned ByteTrack + Kalman filtering. Per-class NMS and area-ratio filtering suppress spurious bboxes without losing real players.</p>
     </div>
     <div class="card">
-      <h3>Graph neural networks</h3>
-      <p>Spatial-temporal graphs from tracked positions; GraphSAGE architecture for player role embeddings. Inference path wired via <code>--gnn-weights</code>; trained checkpoint pending.</p>
+      <h4>Graph neural networks</h4>
+      <p>Spatial-temporal graphs from track positions; GraphSAGE arch for role embeddings. Inference path wired via <code>--gnn-weights</code>; trained checkpoint pending.</p>
     </div>
     <div class="card">
-      <h3>Tactical analytics</h3>
-      <p>Jersey-color team classification (K-means on bbox crops), home/away control percentage per frame, pitch-control grid (12×16). Homography calibration optional.</p>
+      <h4>Tactical analytics</h4>
+      <p>K-means jersey-color team classification, per-frame home/away control %, 12×16 pitch-control grid. Optional homography calibration.</p>
     </div>
     <div class="card">
-      <h3>Live streaming</h3>
-      <p>RTSP camera ingestion with frame-by-frame inference. Low-latency overlay rendering; WebRTC/HLS re-streaming via FastAPI.</p>
+      <h4>Live streaming</h4>
+      <p>RTSP ingestion with frame-by-frame inference and low-latency overlay rendering. WebRTC/HLS re-streaming via FastAPI.</p>
     </div>
     <div class="card">
-      <h3>MLOps</h3>
-      <p>MLflow experiment tracking, DVC dataset versioning, FastAPI REST endpoints, Prometheus metrics, structured JSON logs. Automated weekly retraining scaffold.</p>
+      <h4>MLOps &amp; observability</h4>
+      <p>MLflow experiment tracking, DVC dataset versioning, Prometheus metrics, structured JSON logs, weekly retraining scaffold.</p>
     </div>
     <div class="card">
-      <h3>Dual video source</h3>
-      <p>Automated YouTube highlight download (yt-dlp + Whisper metadata) and FIFA gameplay footage analysis. Adaptive preprocessing per source.</p>
+      <h4>Dual video source</h4>
+      <p>YouTube highlight automation (yt-dlp + Whisper metadata) and FIFA gameplay analysis with adaptive preprocessing per source.</p>
     </div>
   </div>
 
   <h2>Quickstart</h2>
-  <pre><code># 1. Setup environment (Python 3.12)
+  <pre><code># 1. Environment (Python 3.12)
 uv venv --python 3.12 .venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
 
-# 2. Fetch sample data
+# 2. Fetch sample data via DVC
 dvc repro fetch_sample preprocess
 
 # 3. Run the full pipeline
 python -m src.pipeline_full \
-  --frames-dir data/processed/sample \
+  --frames-dir data/processed/real_sample \
   --output-dir outputs/pipeline_run \
   --confidence 0.4 \
   --min-confidence 0.4 \
   --distance-threshold 120.0 \
   --max-age 20
 
-# 4. Live streaming (requires RTSP source)
+# 4. With GNN inference
+python -m src.pipeline_full --gnn-weights path/to/ckpt.pt ...
+
+# 5. Live streaming
 make run-live URL=rtsp://example/stream</code></pre>
 
   <h2>Tech stack</h2>
@@ -200,31 +321,25 @@ make run-live URL=rtsp://example/stream</code></pre>
     <span>PyTorch 2.4</span>
     <span>PyTorch Geometric 2.6</span>
     <span>ByteTrack</span>
-    <span>FastAPI</span>
-    <span>MLflow</span>
+    <span>FastAPI 0.115</span>
+    <span>MLflow 2.17</span>
     <span>DVC</span>
-    <span>OpenCV</span>
+    <span>OpenCV 4.10</span>
     <span>Prometheus</span>
     <span>Docker</span>
     <span>Python 3.12</span>
+    <span>CUDA 12</span>
   </div>
-
-  <h2>Pipeline output</h2>
-  <p>A full run produces:</p>
-  <ul>
-    <li><code>pipeline_summary.json</code> — totals, unique tracks, graph stats, per-team control %</li>
-    <li><code>detections/</code> — per-frame YOLO detection JSON</li>
-    <li><code>tracks/</code> — track history with confidence scores</li>
-    <li><code>overlays/</code> — visualized frames (bbox + track ID + class)</li>
-    <li><code>graphs/</code> — PyG graph data + optional <code>predictions.json</code> (if <code>--gnn-weights</code> provided)</li>
-    <li><code>tactical/</code> — pitch-control grids + team assignments</li>
-  </ul>
 
 </main>
 
 <footer>
-  <p>Built with stock YOLOv8n + custom tracking / graph stack. GraphSAGE training scaffold included; trained weights not yet bundled.<br/>
-  <a href="https://github.com/jayhemnani9910/fifa-soccer-ds">GitHub</a> · <a href="https://github.com/jayhemnani9910/fifa-soccer-ds/actions">CI</a> · MIT License</p>
+  <p>
+    Built with stock YOLOv8n + custom tracking/graph stack. GraphSAGE training scaffold included; trained weights not yet bundled.<br/>
+    <a href="https://github.com/jayhemnani9910/fifa-soccer-ds">GitHub</a> ·
+    <a href="https://github.com/jayhemnani9910/fifa-soccer-ds/actions">CI</a> ·
+    <a href="https://github.com/jayhemnani9910/fifa-soccer-ds/blob/master/LICENSE">MIT License</a>
+  </p>
 </footer>
 
 </body>
