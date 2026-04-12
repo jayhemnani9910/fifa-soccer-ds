@@ -8,11 +8,28 @@ from typing import Any
 
 import torch
 from torch import nn
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
-from torch_geometric.nn import SAGEConv
+
+try:
+    from torch_geometric.data import Data
+    from torch_geometric.loader import DataLoader
+    from torch_geometric.nn import SAGEConv
+
+    _TG_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    Data = None  # type: ignore[assignment,misc]
+    DataLoader = None  # type: ignore[assignment,misc]
+    SAGEConv = None  # type: ignore[assignment,misc]
+    _TG_AVAILABLE = False
 
 from src.eval.metrics import f1_score
+
+
+def _require_torch_geometric() -> None:
+    if not _TG_AVAILABLE:
+        raise ImportError(
+            "torch-geometric is required for PositionClassifier; install with "
+            "`pip install torch-geometric`"
+        )
 
 
 class PositionClassifier(nn.Module):
@@ -27,6 +44,7 @@ class PositionClassifier(nn.Module):
         dropout: float = 0.2,
     ) -> None:
         super().__init__()
+        _require_torch_geometric()
         if num_layers < 1:
             raise ValueError("num_layers must be >= 1")
 
@@ -47,7 +65,7 @@ class PositionClassifier(nn.Module):
     def forward(
         self, data: Data | torch.Tensor, edge_index: torch.Tensor | None = None
     ) -> torch.Tensor:
-        if isinstance(data, Data):
+        if Data is not None and isinstance(data, Data):
             x = data.x
             edge_index = data.edge_index if edge_index is None else edge_index
         else:
@@ -168,6 +186,7 @@ def predict_positions(
     ``state_dict`` and ``meta`` (architecture hyperparams). Node order in the
     output matches ``graph_data.meta`` (list of ``(frame_id, track_id)``).
     """
+    _require_torch_geometric()
     path = Path(weights_path)
     if not path.exists():
         raise FileNotFoundError(f"GNN weights not found: {path}")
