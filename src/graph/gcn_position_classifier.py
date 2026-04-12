@@ -63,7 +63,7 @@ class PositionClassifier(nn.Module):
         self.classifier = nn.Linear(hidden_channels, num_classes)
 
     def forward(
-        self, data: "Data | torch.Tensor", edge_index: torch.Tensor | None = None
+        self, data: Data | torch.Tensor, edge_index: torch.Tensor | None = None
     ) -> torch.Tensor:
         if Data is not None and isinstance(data, Data):
             x = data.x
@@ -86,7 +86,7 @@ class PositionClassifier(nn.Module):
 
 
 def _evaluate(
-    model: PositionClassifier, loader: "DataLoader", device: torch.device
+    model: PositionClassifier, loader: DataLoader, device: torch.device
 ) -> dict[str, float]:
     model.eval()
     predictions: list[int] = []
@@ -106,8 +106,8 @@ def _evaluate(
 
 def train_loop(
     model: PositionClassifier,
-    train_loader: "DataLoader",
-    val_loader: "DataLoader | None" = None,
+    train_loader: DataLoader,
+    val_loader: DataLoader | None = None,
     epochs: int = 20,
     learning_rate: float = 1e-3,
     device: torch.device | None = None,
@@ -176,17 +176,17 @@ def export_checkpoint(
 
 
 def predict_positions(
-    graph_data: "Data",
+    graph_data: Data,
     weights_path: str | Path,
     device: torch.device | None = None,
 ) -> list[dict[str, Any]]:
-    _require_torch_geometric()
     """Load a PositionClassifier checkpoint and run inference on a graph.
 
     The checkpoint format is what ``export_checkpoint`` writes: a dict with
     ``state_dict`` and ``meta`` (architecture hyperparams). Node order in the
     output matches ``graph_data.meta`` (list of ``(frame_id, track_id)``).
     """
+    _require_torch_geometric()
     path = Path(weights_path)
     if not path.exists():
         raise FileNotFoundError(f"GNN weights not found: {path}")
