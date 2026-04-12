@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 class DetectionBox(BaseModel):
@@ -24,15 +24,19 @@ class DetectionBox(BaseModel):
     confidence: float = Field(ge=0, le=1, description="Detection confidence score")
     class_id: int = Field(ge=0, description="Object class identifier")
 
-    @validator("x2")
-    def validate_x2(cls, v, values):
-        if "x1" in values and v <= values["x1"]:
+    @field_validator("x2")
+    @classmethod
+    def validate_x2(cls, v, info):
+        x1 = info.data.get("x1")
+        if x1 is not None and v <= x1:
             raise ValueError("x2 must be greater than x1")
         return v
 
-    @validator("y2")
-    def validate_y2(cls, v, values):
-        if "y1" in values and v <= values["y1"]:
+    @field_validator("y2")
+    @classmethod
+    def validate_y2(cls, v, info):
+        y1 = info.data.get("y1")
+        if y1 is not None and v <= y1:
             raise ValueError("y2 must be greater than y1")
         return v
 
@@ -210,7 +214,8 @@ class YouTubeAnalysisRequest(BaseModel):
     )
     sample_duration: float = Field(default=60.0, gt=0, le=300, description="Audio sample duration")
 
-    @validator("output_dir")
+    @field_validator("output_dir")
+    @classmethod
     def validate_output_dir(cls, v):
         if v is not None:
             # Sanitize directory path

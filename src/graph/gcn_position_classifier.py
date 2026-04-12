@@ -157,4 +157,56 @@ def export_checkpoint(
     return checkpoint_path
 
 
-__all__ = ["PositionClassifier", "train_loop", "export_checkpoint"]
+def predict_positions(
+    graph_data: Data,
+    weights_path: str | Path,
+    device: torch.device | None = None,
+) -> list[dict[str, Any]]:
+    """Load a PositionClassifier checkpoint and run inference on a graph.
+
+    The checkpoint format is what ``export_checkpoint`` writes: a dict with
+    ``state_dict`` and ``meta`` (architecture hyperparams). Node order in the
+    output matches ``graph_data.meta`` (list of ``(frame_id, track_id)``).
+    """
+    path = Path(weights_path)
+    if not path.exists():
+        raise FileNotFoundError(f"GNN weights not found: {path}")
+
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    meta = ckpt.get("meta", {})
+    model = PositionClassifier(
+        in_channels=meta.get("in_channels", graph_data.x.shape[1]),
+        hidden_channels=meta.get("hidden_channels", 64),
+        num_layers=meta.get("num_layers", 2),
+        num_classes=meta.get("num_classes", 3),
+    )
+    model.load_state_dict(ckpt["state_dict"])
+    model.to(device)
+    model.eval()
+
+    node_meta = getattr(graph_data, "meta", None) or []
+
+    with torch.no_grad():
+        data = graph_data.to(device)
+        logits = model(data)
+        probs = torch.softmax(logits, dim=-1)
+        confidences, preds = probs.max(dim=-1)
+
+    predictions: list[dict[str, Any]] = []
+    for idx, (pred, conf) in enumerate(zip(preds.cpu().tolist(), confidences.cpu().tolist())):
+        entry: dict[str, Any] = {"node_idx": idx, "label": int(pred), "confidence": float(conf)}
+        if idx < len(node_meta):
+            frame_id, track_id = node_meta[idx]
+            entry["frame_id"] = int(frame_id)
+            entry["track_id"] = int(track_id)
+        predictions.append(entry)
+    return predictions
+
+
+__all__ = [
+    "PositionClassifier",
+    "train_loop",
+    "export_checkpoint",
+    "predict_positions",
+]

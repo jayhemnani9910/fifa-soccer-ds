@@ -671,7 +671,7 @@ class WeeklyRetrainer:
 
                 train_summary = self.run_fine_tune_loop()
                 for key, value in train_summary.items():
-                    if isinstance(value, (int, float)):
+                    if isinstance(value, int | float):
                         mlflow.log_metric(_mlflow_key(f"train_{key}"), value)
 
                 eval_summary = self.evaluate_on_test_set()
@@ -680,7 +680,7 @@ class WeeklyRetrainer:
                         {
                             _mlflow_key(f"eval_{k}"): v
                             for k, v in eval_summary.items()
-                            if isinstance(v, (int, float))
+                            if isinstance(v, int | float)
                         }
                     )
 

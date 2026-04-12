@@ -4,8 +4,6 @@ This module provides REST API endpoints for external access to the
 YouTube soccer analysis pipeline.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from datetime import datetime

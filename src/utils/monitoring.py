@@ -163,9 +163,9 @@ def timed(metric_histogram: Histogram | None = None):
                 LOGGER.info(
                     f"Function {func.__name__} completed",
                     extra={
-                        "function": func.__name__,
+                        "func_name": func.__name__,
                         "duration": duration,
-                        "module": func.__module__,
+                        "func_module": func.__module__,
                     },
                 )
 

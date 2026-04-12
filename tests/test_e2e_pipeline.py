@@ -295,7 +295,7 @@ class TestPipelineArtifacts:
         gpu_memory = get_gpu_memory_usage()
         system_metrics = get_system_metrics()
 
-        assert isinstance(gpu_memory, (int, float))
+        assert isinstance(gpu_memory, int | float)
         assert isinstance(system_metrics, dict)
         assert "cpu_percent" in system_metrics
         assert "memory_percent" in system_metrics

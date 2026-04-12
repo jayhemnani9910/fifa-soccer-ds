@@ -7,7 +7,7 @@
 
 **Production-ready computer vision pipeline for analyzing soccer gameplay and YouTube highlights.**
 
-Multi-model tracking with YOLOv8 detection, ByteTrack persistence, and GraphSAGE neural networks for tactical pattern recognition — served via FastAPI with full MLOps infrastructure.
+Multi-model tracking with YOLOv8 detection, ByteTrack persistence, and a GraphSAGE scaffold for tactical pattern recognition (inference wired; trained weights pending) — served via FastAPI with full MLOps infrastructure.
 
 > **22 FPS** on 8GB GPU (RTX 3070 class) &bull; **YouTube + FIFA** dual-source support &bull; **Live RTSP** streaming
 
@@ -19,7 +19,7 @@ Multi-model tracking with YOLOv8 detection, ByteTrack persistence, and GraphSAGE
 ┌─────────────────┐     ┌──────────────┐     ┌──────────────┐
 │  Video Source    │     │   Detection  │     │   Tracking   │
 │  YouTube / RTSP │────▶│   YOLOv8     │────▶│  ByteTrack   │
-│  FIFA Gameplay   │     │  (fine-tuned) │     │  + Kalman    │
+│  FIFA Gameplay   │     │  (stock COCO) │     │  + Kalman    │
 └─────────────────┘     └──────────────┘     └──────┬───────┘
                                                      │
                      ┌───────────────┐     ┌─────────▼────────┐
@@ -40,15 +40,15 @@ Each stage logs metrics to MLflow and can run independently or as a unified pipe
 ## Key Features
 
 ### Detection & Tracking
-- **YOLOv8** fine-tuned for soccer: players, ball, referees
+- **YOLOv8n (stock COCO)** with soccer-tuned tracking params; repository ships `yolov8n.pt`. A fine-tuned soccer checkpoint (players / ball / referees) is not yet bundled — training pipeline exists in `src/detect/` and `dvc.yaml`.
 - **ByteTrack** with Kalman filtering for robust multi-object tracking across occlusions
 - Tuned for La Liga footage: `confidence=0.35`, `distance_threshold=120px`, `max_age=20` frames
 
 ### Graph Neural Networks
 - Constructs **spatial-temporal graphs** from tracked player positions
-- **GraphSAGE** learns player role embeddings and tactical patterns
-- Identifies passing networks, defensive formations, pressing behavior
-- GCN-based position classification
+- **GraphSAGE** architecture for learning player role embeddings and tactical patterns — inference is wired into `pipeline_full.py` via `--gnn-weights`; trained checkpoint not yet shipped (see `src/models/train_gcn.py` for the training skeleton)
+- Designed to identify passing networks, defensive formations, pressing behavior
+- GCN-based position classification (untrained)
 
 ### Live Streaming
 - Real-time **RTSP** camera stream processing with frame-by-frame inference
@@ -151,7 +151,7 @@ Running the full pipeline produces:
 | Metric | Value |
 |--------|-------|
 | Inference FPS | **22 FPS** (8GB GPU, RTX 3070 class) |
-| Detection model | YOLOv8 (fine-tuned, 3 classes) |
+| Detection model | YOLOv8n (stock COCO; `person` + `sports ball` classes used) |
 | Tracking | ByteTrack with Kalman filtering |
 | Occlusion recovery | 3-5 frame gaps (`max_age=20`) |
 

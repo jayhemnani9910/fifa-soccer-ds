@@ -32,7 +32,7 @@ class InferenceConfig:
 
     weights: str = "yolov8n.pt"
     device: str = "cuda_if_available"
-    confidence: float = 0.25
+    confidence: float = 0.4
     max_frames: int = 30
 
 
@@ -109,7 +109,7 @@ def _tensor_to_list(values: Any) -> list[float]:
     # Final fallback: iterate or wrap scalar
     try:
         result = list(values)
-        if result and not isinstance(result[0], (int, float)):
+        if result and not isinstance(result[0], int | float):
             return [float(x) for x in result]
         return result
     except TypeError:
@@ -312,7 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Device string (cpu, cuda, cuda:0, etc.). Use cuda_if_available to auto-select.",
     )
     parser.add_argument(
-        "--confidence", type=float, default=0.25, help="Detection confidence threshold."
+        "--confidence", type=float, default=0.4, help="Detection confidence threshold."
     )
     parser.add_argument(
         "--max-frames", type=int, default=30, help="Number of video frames to process."

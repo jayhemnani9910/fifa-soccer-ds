@@ -146,7 +146,7 @@ class YOLOLoRAAdapter(nn.Module):
     def _inject_lora(self, root: nn.Module) -> None:
         self._lora_layers = nn.ModuleList()
         for parent, name, child in _collect_parent_child_pairs(root):
-            if isinstance(child, (nn.Linear, nn.Conv2d)):
+            if isinstance(child, nn.Linear | nn.Conv2d):
                 wrapper = _LoRAWrapper(child, rank=self.lora_rank, alpha=self.lora_alpha)
                 setattr(parent, name, wrapper)
                 self._lora_layers.append(wrapper)
@@ -306,7 +306,7 @@ def _normalise_loss(output: Any) -> dict[str, float]:
             key: float(value) if isinstance(value, Tensor) else float(value)
             for key, value in output.items()
         }
-    if isinstance(output, (tuple, list)):
+    if isinstance(output, tuple | list):
         total = 0.0
         for _, value in enumerate(output):
             if isinstance(value, Tensor):

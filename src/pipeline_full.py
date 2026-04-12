@@ -109,6 +109,11 @@ class PipelineConfig:
 
     # Tracking config
     min_confidence: float = 0.25
+
+    # Detection hygiene
+    allowed_classes: tuple[str, ...] = ("person", "sports ball")
+    max_bbox_area_ratio: float = 0.35
+    nms_iou: float = 0.6
     distance_threshold: float = 80.0
     max_age: int = 15
 
@@ -116,6 +121,9 @@ class PipelineConfig:
     graph_window: int = 30
     graph_distance_threshold: float = 80.0
     include_temporal_edges: bool = True
+
+    # GNN inference config
+    gnn_weights: str = ""  # Path to PositionClassifier checkpoint; empty = skip
 
     # Processing config
     max_frames: int = 30
@@ -291,7 +299,14 @@ def process_frames_directory(
 
         # Tracking with error handling
         try:
-            filtered = filter_detections(detections, min_confidence=cfg.min_confidence)
+            filtered = filter_detections(
+                detections,
+                min_confidence=cfg.min_confidence,
+                allowed_classes=set(cfg.allowed_classes) if cfg.allowed_classes else None,
+                max_area_ratio=cfg.max_bbox_area_ratio,
+                frame_shape=tuple(frame.shape[:2]) if frame is not None else None,
+                nms_iou=cfg.nms_iou,
+            )
             tracklets = tracker.update(frame_id=frame_idx, detections=filtered)
             track_history.append(tracklets)
 
@@ -571,6 +586,28 @@ def process_frames_directory(
         LOGGER.error("Failed to build graph: %s", e)
         num_nodes = 0
         num_edges = 0
+        graph_data = None
+
+    # GNN inference (optional)
+    if cfg.gnn_weights and graph_data is not None and num_nodes > 0:
+        try:
+            from src.graph.gcn_position_classifier import predict_positions
+
+            LOGGER.info("Running GNN position classifier: %s", cfg.gnn_weights)
+            predictions = predict_positions(graph_data, cfg.gnn_weights)
+            preds_path = output_dir / "graphs" / "predictions.json"
+            with preds_path.open("w", encoding="utf-8") as f:
+                json.dump(
+                    {"num_predictions": len(predictions), "predictions": predictions},
+                    f,
+                    indent=2,
+                )
+            LOGGER.info("GNN predictions written: %s (%d nodes)", preds_path, len(predictions))
+        except Exception as e:
+            LOGGER.error("GNN inference failed: %s", e)
+            LOGGER.debug(traceback.format_exc())
+    elif cfg.gnn_weights:
+        LOGGER.warning("GNN weights provided but graph is empty; skipping inference")
 
     # Create summary
     summary = PipelineSummary(
@@ -1053,7 +1090,7 @@ def main() -> None:
         # Model options
         parser.add_argument("--weights", type=str, default="yolov8n.pt", help="YOLO weights file")
         parser.add_argument(
-            "--confidence", type=float, default=0.25, help="Detection confidence threshold"
+            "--confidence", type=float, default=0.4, help="Detection confidence threshold"
         )
         parser.add_argument(
             "--min-confidence", type=float, default=0.25, help="Minimum confidence for tracking"
@@ -1073,6 +1110,24 @@ def main() -> None:
             type=float,
             default=80.0,
             help="Distance threshold for spatial edges",
+        )
+        parser.add_argument(
+            "--max-bbox-area-ratio",
+            type=float,
+            default=0.35,
+            help="Drop bboxes whose area / frame area exceeds this (0.35 = 35%% of frame)",
+        )
+        parser.add_argument(
+            "--nms-iou",
+            type=float,
+            default=0.6,
+            help="Per-class NMS IoU threshold (1.0 disables)",
+        )
+        parser.add_argument(
+            "--gnn-weights",
+            type=str,
+            default="",
+            help="Path to PositionClassifier checkpoint (.pt); empty = skip GNN inference",
         )
         parser.add_argument(
             "--log-level",
@@ -1102,6 +1157,9 @@ def main() -> None:
             max_frames=args.max_frames,
             graph_window=args.graph_window,
             graph_distance_threshold=args.graph_distance_threshold,
+            gnn_weights=args.gnn_weights,
+            max_bbox_area_ratio=args.max_bbox_area_ratio,
+            nms_iou=args.nms_iou,
         )
 
         # Process based on input mode

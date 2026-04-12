@@ -35,7 +35,7 @@ class DummyBoxes:
 class DummyResult:
     def __init__(self):
         self.boxes = DummyBoxes()
-        self.names = {0: "player"}
+        self.names = {0: "person"}
 
 
 class DummyYOLO:
