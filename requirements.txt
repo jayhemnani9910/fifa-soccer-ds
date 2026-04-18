@@ -45,7 +45,7 @@ fastapi==0.115.5
 uvicorn[standard]==0.32.1
 slowapi==0.1.9
 prometheus-client==0.21.0
-psutil==6.1.0
+psutil==7.2.2
 
 # Video processing
 av==13.1.0
