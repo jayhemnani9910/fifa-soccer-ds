@@ -13,7 +13,7 @@ torchmetrics==1.5.2
 
 # Data processing
 numpy==1.26.4
-scipy==1.13.1
+scipy==1.17.1
 pandas==2.2.3
 
 # Model deployment

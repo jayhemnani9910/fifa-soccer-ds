@@ -23,7 +23,7 @@ dependencies = [
   "torch-geometric==2.6.1",
   "torchmetrics==1.5.2",
   "numpy==1.26.4",
-  "scipy==1.13.1",
+  "scipy==1.17.1",
   "pandas==2.2.3",
   "onnx==1.17.0",
   "onnxruntime-gpu==1.19.2",
