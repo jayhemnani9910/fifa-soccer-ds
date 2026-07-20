@@ -62,16 +62,19 @@ outputs/
 .dvc/tmp/
 .dvc/cache/
 
-# All data files (keep locally, don't push to GitHub)
-data/
+# Repository datasets and generated data (do not match the src/data package).
+/data/
 
 # MLflow
 mlruns/
+mlflow.db
+mlartifacts/
 
 # Jupyter
 .ipynb_checkpoints/
 
 # ML Models (large files)
+/models/
 *.onnx
 *.pt
 *.pth

@@ -4,37 +4,46 @@ VENV ?= .venv
 URL ?= 0
 FRAMES_DIR ?= data/processed/sample
 OUTPUT_DIR ?= outputs/pipeline_run
+CHECK_PATHS := src tests scripts
 
-.PHONY: setup lint test smoke run run-detect run-live run-pipeline fmt lint-all export trt clean
+.PHONY: setup setup-all build check lint test test-cov smoke run run-detect run-live run-pipeline fmt lint-all export trt clean
 
 setup:
-	$(PIP) install --upgrade pip
-	$(PIP) install -r requirements.txt
-	pre-commit install
+	$(PIP) install --upgrade "pip==26.1.2" "setuptools==83.0.0" "wheel==0.47.0"
+	$(PIP) install -e ".[dev]"
+	$(PYTHON) -m pre_commit install
+
+setup-all:
+	$(PIP) install -e ".[audio,data,dev,export,mlops]"
+
+build:
+	$(PYTHON) -m build
+
+check: lint test
 
 lint:
-	ruff check src tests
-	ruff format --check src tests
-	isort --check-only src tests
-	black --check src tests
+	ruff check $(CHECK_PATHS)
+	ruff format --check $(CHECK_PATHS)
 	mypy src
 
 fmt:
-	ruff format src tests
-	isort src tests
-	black src tests
+	ruff check --fix $(CHECK_PATHS)
+	ruff format $(CHECK_PATHS)
 
 lint-all:
-	pre-commit run --all-files
+	$(PYTHON) -m pre_commit run --all-files
 
 test:
-	pytest
+	$(PYTHON) -m pytest
+
+test-cov:
+	$(PYTHON) -m pytest --cov=src --cov-branch --cov-report=term-missing
 
 smoke:
-	pytest -m smoke
+	$(PYTHON) -m pytest -m smoke
 
 run:
-	@echo "TODO: wire live pipeline entrypoint (see src/live/run_live.py)."
+	$(PYTHON) -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
 
 run-detect:
 	$(PYTHON) -m src.detect.infer --output outputs/detect
@@ -51,10 +60,10 @@ run-pipeline:
 		--max-age 20
 
 export:
-	@echo "TODO: export trained weights to ONNX/TorchScript."
+	$(PYTHON) -m src.detect.export_onnx
 
 trt:
-	@echo "TODO: integrate TensorRT conversion pipeline."
+	@echo "Use: python -m src.detect.export_trt --onnx MODEL.onnx --output MODEL.plan --fp16"
 
 clean:
-	rm -rf build/ dist/ .pytest_cache/ .coverage outputs/
+	@echo "Refusing to delete outputs automatically; remove generated paths explicitly after review."

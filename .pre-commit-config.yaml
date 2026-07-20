@@ -1,36 +1,30 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0
     hooks:
       - id: check-yaml
       - id: check-toml
       - id: end-of-file-fixer
       - id: trailing-whitespace
-  - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: v0.5.4
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 2700fd5671c633760d912769c041bfcde2b9a01b  # v0.15.22
     hooks:
-      - id: ruff
+      - id: ruff-check
       - id: ruff-format
-  - repo: https://github.com/psf/black
-    rev: 24.4.2
-    hooks:
-      - id: black
-        language_version: python3.13
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        additional_dependencies: ["tomli"]
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
+  # Type checking must see the project's installed runtime dependencies. An
+  # isolated mirrors-mypy environment reports false import failures unless the
+  # entire ML/CV stack is duplicated inside the hook environment.
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies:
-          - types-PyYAML
-          - types-requests
+        name: mypy
+        entry: python -m mypy
+        language: system
+        args: ["src"]
+        pass_filenames: false
   - repo: https://github.com/pycqa/bandit
-    rev: 1.7.5
+    rev: 92ae8b82fb422a639f0ed8d99e96cea769594e08  # 1.9.4
     hooks:
       - id: bandit
-        args: ["-r", "src/", "-f", "json", "-o", "bandit-report.json"]
+        args: ["-c", "pyproject.toml", "-r", "src/"]
         pass_filenames: false
