@@ -110,6 +110,57 @@ the Kaggle bug belonged to, by importing each one in a subprocess with a
 credential-free HOME. All 55 import cleanly, so that bug was the only one of its
 kind.
 
+### Phase 1.1 and 1.2, done
+
+Liveness and readiness are now separate. Health keeps reporting process liveness
+and stays available whatever the model state, so an orchestrator will not kill a
+running container over a missing checkpoint. A readiness endpoint reports whether
+an analysis could actually be served, and the Dockerfile and Compose healthchecks
+probe that instead. Readiness inspects configuration and filesystem state only
+and never loads a checkpoint, since it runs every thirty seconds.
+
+The batch orchestrator and the live detector factory both fell back to the bare
+filename `yolov8n.pt`, which resolves against the working directory and so
+silently loaded the untracked checkpoint in the repository root. Both now require
+explicit configuration. Failure messages name the setting without echoing the
+configured path back to callers.
+
+Three rounds with a separate reviewer session. Each round found something real:
+
+1. A production `assert` introduced for type narrowing. Bandit flags it as B101
+   and exits 1, which fails CI's security job, and it is the same class the July
+   audit removed under AUD-024. Caused by an acceptance list that specified
+   `make lint` (ruff and mypy) when the gate CI applies is `make lint-all`, which
+   includes bandit. Every later brief specifies the aggregate gate.
+2. The fix was incomplete and the central behaviour was untested. `barca_api.py`
+   still had the same fallback, and reintroducing the fallback in the orchestrator
+   left all 262 tests passing, because the readiness endpoints read the
+   environment themselves without a default and no test exercised the orchestrator
+   path with the variable unset. Tests also run from the repository root where
+   `yolov8n.pt` genuinely exists, so a reintroduced bare filename resolved. Both
+   gaps came from a brief that named a line number rather than describing the
+   defect class.
+3. `.env.example` shipped `YOLO_WEIGHTS=yolov8n.pt`. That mattered more after the
+   dev Compose profile began reading that file earlier the same day, so following
+   the documented setup would have quietly accepted the unreviewed checkpoint and
+   defeated the whole change. Found by the reviewer, not by the conductor, whose
+   own three mutation checks all passed.
+
+Both fallbacks are verified load-bearing by conductor-run mutations, each caught
+by its own test, with the source restored byte-identically each time.
+
+### Follow-ups recorded, not done
+
+Nine `"yolov8n.pt"` defaults remain in CLI flags and dataclass fields across
+`pipeline_full.py`, `infer.py`, `export_onnx.py`, `run_live.py`,
+`la_liga_loader.py` and `yolo_lora_adapter.py`. These differ from the service
+defect: a human passing `--weights` sees what they are selecting. Worth revisiting
+for consistency with the trusted-artifact policy.
+
+`YOLO_WEIGHTS` is now read at four call sites. They all delegate to the same
+predicate today, so they cannot disagree, but a single resolution point would
+remove the drift risk.
+
 ### Not started
 
 Phase 0.2, recreating `.venv` from `pyproject.toml`. Deliberately deferred: the
