@@ -1,34 +1,20 @@
-# Copilot Instructions for FIFA Soccer DS
+# Repository coding instructions
 
-## Code Style
-- Python 3.11+ features (match statements, `type` aliases, `ExceptionGroup`)
-- Line length: 100 characters (ruff/black)
-- Double quotes for strings
-- Type-hint all function signatures and return types
-- Use `from __future__ import annotations` for forward references
+- Target CPython `>=3.12,<3.13`; use `from __future__ import annotations` in Python modules.
+- Treat `pyproject.toml` as the dependency and tool-configuration source of truth.
+- Use Ruff for linting, import sorting, and formatting (100-character line length) and mypy for
+  first-party source typing.
+- Use Pydantic v2 models for API boundaries and `pathlib.Path` for filesystem paths.
+- Use structured `logging` in production paths; do not add `print` outside intentional CLI output.
+- Keep optional integrations isolated and fail explicitly when a requested capability is absent.
+- Never fabricate metrics, artifacts, successful results, player identities, or tactical events.
+- Validate media/model paths, sizes, URLs, dimensions, finite numerical inputs, and output roots.
+- Load PyTorch artifacts with restricted loading where possible; require explicit trust for
+  unavoidable pickle-backed datasets.
+- Add focused pytest regression coverage for behavior and security changes.
+- Run `make lint`, `make test`, and the relevant focused checks before proposing a change.
+- Do not claim GPU, network, model-quality, or real-media validation from mocked/synthetic tests.
 
-## Conventions
-- Use Pydantic v2 models for API request/response schemas (see `src/schemas.py`)
-- Use `rich` for CLI output formatting
-- Use `supervision` library for detection visualization
-- Prefer `numpy` vectorized operations over Python loops
-- Use `logging` module (not print) for all output in `src/`
-- Follow Conventional Commits: `feat:`, `fix:`, `chore:`, `docs:`, `test:`
-
-## Architecture
-- Detection: `src/detect/` — YOLOv8 inference and export
-- Tracking: `src/track/` — ByteTrack with Kalman filtering
-- Graph: `src/graph/` — spatial-temporal graph construction
-- Models: `src/models/` — GraphSAGE / GCN architectures
-- API: `src/api/` — FastAPI endpoints with rate limiting
-- Utils: `src/utils/` — monitoring, visualization, health checks
-
-## Testing
-- Test files go in `tests/` with `test_` prefix
-- Use `pytest` with markers (`@pytest.mark.smoke` for quick tests)
-- Mock external services (MLflow, YouTube, GPU) in tests
-- Run `make lint` and `make test` before committing
-
-## Dependencies
-- Guard optional imports with try/except (torch-geometric, prometheus_client, psutil)
-- Core deps are in `requirements.txt`, full list in `pyproject.toml`
+Major areas are `src/api`, `src/analytics`, `src/calib`, `src/data`, `src/detect`, `src/graph`,
+`src/live`, `src/models`, `src/track`, and `src/youtube`. Preserve their import direction and avoid
+adding new global mutable state or eager heavy imports in package `__init__.py` files.
