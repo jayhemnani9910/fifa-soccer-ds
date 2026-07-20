@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import os
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -127,6 +129,37 @@ def test_metadata_paths_cannot_escape_dataset_cache(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must stay within dataset cache"):
         loader.load_metadata(csv_path)
+
+
+def test_importing_module_does_not_authenticate_with_kaggle(tmp_path: Path) -> None:
+    """Importing the loader must not eagerly authenticate with Kaggle.
+
+    kaggle's own package __init__ calls exit(1) when no credentials are
+    configured, so resolving the Kaggle API at module scope kills the process
+    before _ensure_api's KaggleAuthenticationError handling is ever reached.
+    """
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"KAGGLE_USERNAME", "KAGGLE_KEY"}
+    }
+    env["HOME"] = str(fake_home)
+    env["KAGGLE_CONFIG_DIR"] = str(fake_home)
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import src.data; print('IMPORT_OK')"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "IMPORT_OK" in result.stdout
 
 
 def test_dvc_registration_failure_is_not_reported_as_versioned(

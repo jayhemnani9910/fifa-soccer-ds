@@ -206,10 +206,27 @@ class ParallelPseudoLabeler:
             output_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-try:  # pragma: no cover - optional dependency
-    KaggleApi: Any | None = importlib.import_module("kaggle.api.kaggle_api_extended").KaggleApi
-except ImportError:  # pragma: no cover - handled gracefully when Kaggle is unavailable
-    KaggleApi = None
+KaggleApi: Any | None = None
+
+
+def _resolve_kaggle_api() -> Any | None:
+    """Import the Kaggle API class on demand, never at module load time.
+
+    kaggle's own package __init__ calls ``api.authenticate()`` on import,
+    which does ``exit(1)`` (raising SystemExit, not ImportError) when no
+    credentials are configured. Resolving lazily keeps that from killing the
+    process just for importing this module.
+    """
+
+    global KaggleApi
+    if KaggleApi is not None:
+        return KaggleApi
+    try:
+        KaggleApi = importlib.import_module("kaggle.api.kaggle_api_extended").KaggleApi
+    except (ImportError, SystemExit):
+        KaggleApi = None
+    return KaggleApi
+
 
 try:  # pragma: no cover - optional dependency
     av: Any | None = importlib.import_module("av")
@@ -370,12 +387,13 @@ class KaggleDataLoader:
 
     # Internal helpers ------------------------------------------------------------
     def _ensure_api(self) -> Any:
-        if KaggleApi is None:
+        api_cls = _resolve_kaggle_api()
+        if api_cls is None:
             raise KaggleAuthenticationError(
                 "kaggle package is not installed. Install it or disable Kaggle downloads."
             )
         if self._api is None:
-            api = KaggleApi()
+            api = api_cls()
             try:
                 api.authenticate()
             except Exception as exc:  # pragma: no cover - depends on Kaggle CLI config
