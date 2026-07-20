@@ -80,6 +80,36 @@ dotfiles outside the repository, moving the real `.env` aside behind a shell
 trap, and rendering the `dev` Compose service in a way that would have printed
 `.env` values into the transcript.
 
+### Phase 1.6, done (autonomous continuation)
+
+Closed the largest verified coverage gap. The soccer branch of
+`process_youtube_video` assembles the result returned by `POST /analyze`,
+including the `capabilities` block and the three helpers that return empty
+rather than invented analytics, and it had zero coverage. Three tests now stub
+only the network and model boundaries so classification, frame processing,
+graph building and result assembly run for real, then assert that capabilities
+stay marked not implemented, that events stay empty, that players and team
+metrics carry no identity or possession keys, and that counters scale with the
+synthetic input instead of being constants.
+
+`src/pipeline_full.py` coverage moved from 46 to 54 percent and the assembly
+block is no longer unexecuted. Verified load-bearing by three independent
+mutations run by the conductor, each caught by a different test: marking
+`event_detection` implemented, adding a `goals` count to players, and replacing
+the detection total with a constant. The source file was restored byte-exactly
+after each.
+
+Deviation worth noting: this diff did not get a separate reviewer session,
+because the account's rolling usage was at 98 percent. It is test-only with no
+behaviour change, and three independent mutations are a stronger check on test
+quality than a read-through would have been, but the usual two-session
+discipline was not applied.
+
+Also swept every module under `src/` for the import-time side effect class that
+the Kaggle bug belonged to, by importing each one in a subprocess with a
+credential-free HOME. All 55 import cleanly, so that bug was the only one of its
+kind.
+
 ### Not started
 
 Phase 0.2, recreating `.venv` from `pyproject.toml`. Deliberately deferred: the
