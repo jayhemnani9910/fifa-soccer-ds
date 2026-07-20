@@ -108,6 +108,9 @@ services:
     image: fifa-soccer-ds:dev
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     working_dir: /workspace
+    env_file:
+      - path: .env
+        required: false
     command: ["bash"]
     stdin_open: true
     tty: true

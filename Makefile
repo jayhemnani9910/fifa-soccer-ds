@@ -1,6 +1,6 @@
-PYTHON ?= python3
-PIP ?= $(PYTHON) -m pip
 VENV ?= .venv
+PYTHON ?= $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
+PIP ?= $(PYTHON) -m pip
 URL ?= 0
 FRAMES_DIR ?= data/processed/sample
 OUTPUT_DIR ?= outputs/pipeline_run
@@ -17,18 +17,18 @@ setup-all:
 	$(PIP) install -e ".[audio,data,dev,export,mlops]"
 
 build:
-	$(PYTHON) -m build
+	$(PYTHON) -I -m build
 
 check: lint test
 
 lint:
-	ruff check $(CHECK_PATHS)
-	ruff format --check $(CHECK_PATHS)
-	mypy src
+	$(PYTHON) -m ruff check $(CHECK_PATHS)
+	$(PYTHON) -m ruff format --check $(CHECK_PATHS)
+	$(PYTHON) -m mypy src
 
 fmt:
-	ruff check --fix $(CHECK_PATHS)
-	ruff format $(CHECK_PATHS)
+	$(PYTHON) -m ruff check --fix $(CHECK_PATHS)
+	$(PYTHON) -m ruff format $(CHECK_PATHS)
 
 lint-all:
 	$(PYTHON) -m pre_commit run --all-files

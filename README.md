@@ -127,8 +127,12 @@ python -m src.pipeline_full \
 
 ## Run the API
 
-Copy `.env.example` values into your environment, then start the loopback-bound development
-server:
+The application reads configuration from process environment variables only
+(`os.environ` / `os.getenv`). There is no dotenv loader in `src/`, so editing `.env` has no
+effect on `make run` or `make run-pipeline` by itself. Copy `.env.example` to `.env` for
+reference, then either export the values you need into your shell before running `make run`,
+or start the `dev` Compose profile (`docker compose --profile dev up dev`), which is the one
+service wired to read `.env` via `env_file`. Then start the loopback-bound development server:
 
 ```bash
 make run
