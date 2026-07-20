@@ -85,7 +85,12 @@ extend-exclude = [
   "build",
   "dist",
   "mlruns",
+  "audits",
 ]
+# pre-commit passes explicit filenames, which bypass extend-exclude unless
+# exclusions are forced. audits/ holds frozen verification evidence that is
+# archived as produced, not maintained as project source.
+force-exclude = true
 lint.isort.known-first-party = ["src"]
 lint.select = [
   "E",

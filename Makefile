@@ -30,8 +30,11 @@ fmt:
 	$(PYTHON) -m ruff check --fix $(CHECK_PATHS)
 	$(PYTHON) -m ruff format $(CHECK_PATHS)
 
+# The mypy pre-commit hook is a system hook running `python -m mypy`, so it needs
+# a `python` on PATH that has the project dependencies installed. CI gets that
+# from setup-python; locally only `python3` exists, so put the virtualenv first.
 lint-all:
-	$(PYTHON) -m pre_commit run --all-files
+	PATH="$(abspath $(VENV))/bin:$$PATH" $(PYTHON) -m pre_commit run --all-files
 
 test:
 	$(PYTHON) -m pytest
