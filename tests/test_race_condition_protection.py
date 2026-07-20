@@ -11,7 +11,6 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 import pytest
 
@@ -41,8 +40,21 @@ class TestRetrainingLock:
         assert lock.is_locked() is True
 
         lock.release()
-        assert not self.lock_file.exists()
+        # The inode remains in place so waiters never lock a deleted inode.
+        assert self.lock_file.exists()
         assert lock.is_locked() is False
+
+        replacement = RetrainingLock(self.lock_file, timeout=1.0)
+        assert replacement.acquire() is True
+        replacement.release()
+
+    def test_default_lock_uses_private_runtime_directory(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+
+        lock = RetrainingLock()
+
+        assert lock.lock_file.parent.parent == tmp_path
+        assert lock.lock_file.parent.stat().st_mode & 0o777 == 0o700
 
     def test_context_manager(self):
         """Test RetrainingLock as context manager."""
@@ -50,7 +62,11 @@ class TestRetrainingLock:
             assert lock.is_locked() is True
             assert self.lock_file.exists()
 
-        assert not self.lock_file.exists()
+        assert self.lock_file.exists()
+
+        replacement = RetrainingLock(self.lock_file, timeout=1.0)
+        assert replacement.acquire() is True
+        replacement.release()
 
     def test_timeout_behavior(self):
         """Test timeout when lock cannot be acquired."""
@@ -296,14 +312,8 @@ class TestIntegrationRaceConditions:
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch("src.train.weekly_retrainer.version_data_with_dvc")
-    @patch("src.train.weekly_retrainer.load_new_la_liga_data")
-    def test_concurrent_data_loading(self, mock_load_data, mock_version_dvc):
-        """Test concurrent data loading with race condition protection."""
-        # Mock data loading
-        mock_load_data.return_value = Mock()
-        mock_version_dvc.return_value = Mock()
-
+    def test_concurrent_data_loading(self):
+        """Test that the data-loading critical section is serialized."""
         results = []
 
         def worker(worker_id):

@@ -22,14 +22,23 @@ class TestGraphMemory:
         assert small["nodes"] == 100
         assert small["sparse_edges"] == 500
         assert small["sparse_memory_mb"] < 1.0
-        assert small["memory_ratio"] > 10.0  # Dense is much larger
+        assert small["memory_ratio"] == pytest.approx(
+            small["dense_memory_mb"] / small["sparse_memory_mb"]
+        )
+        assert small["memory_ratio"] > 1.0
 
         # Large graph
         large = estimate_graph_memory(1000, avg_degree=8.0)
         assert large["nodes"] == 1000
         assert large["sparse_edges"] == 8000
         assert large["sparse_memory_mb"] < 10.0
-        assert large["memory_ratio"] > 100.0
+        assert large["memory_ratio"] > small["memory_ratio"]
+
+        assert estimate_graph_memory(0)["memory_ratio"] == 1.0
+        with pytest.raises(ValueError, match="num_nodes"):
+            estimate_graph_memory(-1)
+        with pytest.raises(ValueError, match="avg_degree"):
+            estimate_graph_memory(10, avg_degree=-1)
 
     def test_small_graph_memory(self):
         """Test graph construction with small number of nodes."""

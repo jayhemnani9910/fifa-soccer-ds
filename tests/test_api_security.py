@@ -89,6 +89,21 @@ class TestCORSConfiguration:
         # The app should have middleware configured
         assert len(app.user_middleware) > 0
 
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "*",
+            "file:///tmp/index.html",
+            "https://user:password@example.com",
+            "https://example.com/path",
+        ],
+    )
+    def test_invalid_cors_origins_are_rejected(self, origin):
+        from src.api.main import _validate_cors_origin
+
+        with pytest.raises(ValueError, match="Invalid CORS origin"):
+            _validate_cors_origin(origin)
+
 
 class TestRateLimiting:
     """Test rate limiting on API endpoints."""
@@ -131,12 +146,13 @@ class TestSecurityConfiguration:
         # slowapi attaches _rate_limit_string attribute to decorated functions
         assert hasattr(analyze_video, "__wrapped__") or callable(analyze_video)
 
-    def test_app_has_startup_event(self):
-        """Test that app has startup event for initialization."""
+    def test_app_uses_lifespan_for_initialization(self):
+        """Test that app lifecycle initialization uses FastAPI lifespan."""
         from src.api.main import app
 
-        # App should have startup handlers
-        assert len(app.router.on_startup) > 0
+        assert app.router.lifespan_context is not None
+        assert app.router.on_startup == []
+        assert app.router.on_shutdown == []
 
     def test_app_has_exception_handlers(self):
         """Test that app has exception handlers configured."""
@@ -152,28 +168,14 @@ class TestSecurityConfiguration:
 class TestAPISecurityBestPractices:
     """Test additional security best practices."""
 
-    def test_ssl_verification_configurable(self):
-        """Test that SSL verification is configurable via environment."""
-        # The video downloader should respect SSL settings
+    def test_ssl_verification_cannot_be_disabled(self, monkeypatch):
+        """A legacy environment variable must not disable TLS verification."""
         from src.youtube.video_downloader import YouTubeDownloader
 
-        # By default, SSL should be enabled (nocheckcertificate=False)
-        original_env = os.environ.get("YT_DLP_SKIP_SSL", "")
-        try:
-            # Clear env var to test default
-            os.environ.pop("YT_DLP_SKIP_SSL", None)
-            downloader = YouTubeDownloader()
-            assert downloader.ydl_opts.get("nocheckcertificate", False) is False
+        monkeypatch.setenv("YT_DLP_SKIP_SSL", "1")
+        downloader = YouTubeDownloader()
 
-            # Test that env var can override
-            os.environ["YT_DLP_SKIP_SSL"] = "1"
-            downloader2 = YouTubeDownloader()
-            assert downloader2.ydl_opts.get("nocheckcertificate", False) is True
-        finally:
-            if original_env:
-                os.environ["YT_DLP_SKIP_SSL"] = original_env
-            else:
-                os.environ.pop("YT_DLP_SKIP_SSL", None)
+        assert downloader.ydl_opts["nocheckcertificate"] is False
 
     def test_cors_allows_credentials(self):
         """Test that CORS configuration allows credentials."""

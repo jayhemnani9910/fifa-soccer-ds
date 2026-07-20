@@ -5,6 +5,7 @@ import pytest
 
 from src.detect import InferenceConfig
 from src.detect import infer as detect_infer
+from src.detect.export_trt import TensorRTExportConfig, TensorRTMemoryManager
 from src.detect.yolo_lora_adapter import YOLOLoRAAdapter
 
 
@@ -81,6 +82,11 @@ class DummyYOLOForExport:
         return torch.tensor(0.1, requires_grad=True)
 
 
+class FailingYOLOExporter(DummyYOLOForExport):
+    def export(self, format: str, path: str, **kwargs):
+        raise RuntimeError("export backend unavailable")
+
+
 @pytest.mark.smoke
 def test_run_image_detection_emits_detections(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(detect_infer, "YOLO", DummyYOLO)
@@ -111,11 +117,45 @@ def test_yolo_lora_export_onnx(tmp_path: Path):
     assert "onnx" in contents
 
 
-def test_tensorrt_engine_loads(tmp_path: Path):
+def test_tensorrt_export_produces_nonempty_engine(tmp_path: Path):
     adapter = YOLOLoRAAdapter(model=DummyYOLOForExport(), weights="dummy.pt")
     engine_path = adapter.export_to_tensorrt(output_dir=tmp_path, workspace_size=1 << 20)
 
     assert engine_path.exists()
     assert engine_path.suffix == ".engine"
     contents = engine_path.read_text().strip()
-    assert "tensorrt" in contents
+    assert json.loads(contents)["format"] == "engine"
+
+
+@pytest.mark.parametrize("format_name", ["onnx", "tensorrt"])
+def test_failed_export_does_not_create_placeholder(tmp_path: Path, format_name: str):
+    adapter = YOLOLoRAAdapter(model=FailingYOLOExporter(), weights="dummy.pt")
+
+    with pytest.raises(RuntimeError, match="export failed"):
+        if format_name == "onnx":
+            adapter.export_to_onnx(output_dir=tmp_path)
+        else:
+            adapter.export_to_tensorrt(output_dir=tmp_path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_native_tensorrt_export_rejects_uncalibrated_int8() -> None:
+    with pytest.raises(ValueError, match="calibration"):
+        TensorRTExportConfig(int8=True)
+
+
+def test_tensorrt_memory_manager_does_not_call_destructor_directly() -> None:
+    class ManagedObject:
+        def __init__(self) -> None:
+            self.destructor_calls = 0
+
+        def __del__(self) -> None:
+            self.destructor_calls += 1
+
+    managed = ManagedObject()
+    manager = TensorRTMemoryManager()
+    manager.register_object("managed", managed)
+    manager.cleanup_object("managed")
+
+    assert managed.destructor_calls == 0

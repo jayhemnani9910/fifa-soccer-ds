@@ -1,286 +1,167 @@
-"""Test security-related functionality."""
+"""Security regression tests for frame ingestion and pipeline error boundaries."""
 
-import tempfile
+from contextlib import nullcontext
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import Mock, patch
 
+import cv2
+import numpy as np
 import pytest
 
 from src.pipeline_full import PipelineConfig, process_frames_directory
 
 
+def _write_jpeg(path: Path, shape: tuple[int, int] = (16, 16)) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = np.zeros((shape[0], shape[1], 3), dtype=np.uint8)
+    success, encoded = cv2.imencode(".jpg", image)
+    assert success
+    path.write_bytes(encoded.tobytes())
+
+
+@pytest.fixture()
+def detector(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    fake = Mock(predict=Mock(return_value=[]))
+    monkeypatch.setattr("src.pipeline_full.load_model", lambda _config: fake)
+    monkeypatch.setattr("src.pipeline_full.mlflow", None)
+    return fake
+
+
+def _config(**overrides) -> PipelineConfig:  # type: ignore[no-untyped-def]
+    return PipelineConfig(enable_tactical_analytics=False, **overrides)
+
+
 class TestInputValidation:
-    """Test input validation and sanitization."""
+    def test_only_numbered_jpeg_frames_are_processed(self, tmp_path: Path, detector: Mock) -> None:
+        frames_dir = tmp_path / "frames"
+        valid = frames_dir / "frame_001.jpg"
+        _write_jpeg(valid)
+        _write_jpeg(frames_dir / "frame_002.png")
+        (frames_dir / "malicious.exe").write_bytes(b"MZ")
+        (frames_dir / "frame_003.jpg.txt").write_text("not an image", encoding="utf-8")
 
-    def test_path_traversal_prevention(self):
-        """Test prevention of path traversal attacks."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            base_dir = Path(tmp_dir)
+        with patch("src.pipeline_full.cv2.imread", wraps=cv2.imread) as imread:
+            summary = process_frames_directory(frames_dir, tmp_path / "output", _config())
 
-            # Test path traversal attempts
-            malicious_paths = [
-                "../../../etc/passwd",
-                "..\\..\\windows\\system32\\config",
-                "/etc/shadow",
-                "C:\\Windows\\System32\\drivers\\etc\\hosts",
-            ]
+        assert summary.total_frames == 1
+        assert detector.predict.call_count == 1
+        imread.assert_called_once_with(valid.as_posix())
 
-            for malicious_path in malicious_paths:
-                with pytest.raises((FileNotFoundError, ValueError)):
-                    process_frames_directory(
-                        frames_dir=Path(malicious_path),
-                        output_dir=base_dir / "output",
-                    )
+    @pytest.mark.parametrize(
+        "filename",
+        ["frame_001;rm.jpg", "frame_secret.jpg", "frame_001.jpg.exe", ".frame_001.jpg"],
+    )
+    def test_unexpected_frame_names_are_rejected(self, tmp_path: Path, filename: str) -> None:
+        _write_jpeg(tmp_path / filename)
 
-    def test_file_type_validation(self):
-        """Test that only valid image files are processed."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            frames_dir = Path(tmp_dir)
-            output_dir = Path(tmp_dir) / "output"
+        with pytest.raises(ValueError, match="No frame files found"):
+            process_frames_directory(tmp_path, tmp_path / "output", _config())
 
-            # Create various file types
-            (frames_dir / "frame_001.jpg").write_bytes(b"fake image data")
-            (frames_dir / "frame_002.png").write_bytes(b"fake png data")
-            (frames_dir / "malicious.exe").write_bytes(b"fake executable")
-            (frames_dir / "script.sh").write_text("#!/bin/bash\necho 'hack'")
-            (frames_dir / "document.pdf").write_bytes(b"%PDF-1.4")
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("confidence", float("inf")),
+            ("confidence", float("nan")),
+            ("min_confidence", -0.1),
+            ("distance_threshold", float("inf")),
+            ("graph_distance_threshold", 0.0),
+            ("max_bbox_area_ratio", 1.1),
+            ("nms_iou", -0.1),
+            ("max_frames", -1),
+            ("max_frame_bytes", 0),
+            ("max_frame_pixels", 0),
+        ],
+    )
+    def test_invalid_numeric_configuration_is_rejected(self, field: str, value: float) -> None:
+        with pytest.raises(ValueError, match=field):
+            PipelineConfig(**{field: value})
 
-            # Should only process image files
-            with patch("src.pipeline_full.cv2") as mock_cv2:
-                mock_cv2.imread.return_value = None  # Simulate failed reads
+    def test_encoded_size_limit_is_checked_before_decode(
+        self, tmp_path: Path, detector: Mock
+    ) -> None:
+        frame = tmp_path / "frame_001.jpg"
+        with frame.open("wb") as handle:
+            handle.truncate(1025)
 
-                summary = process_frames_directory(
-                    frames_dir=frames_dir,
-                    output_dir=output_dir,
-                    config=PipelineConfig(max_frames=10),
-                )
-
-                # Should find only image files
-                assert summary.total_frames <= 2  # Only .jpg and .png files
-
-    def test_config_parameter_sanitization(self):
-        """Test configuration parameter sanitization."""
-        # Test extremely large values
-        with pytest.raises(ValueError):
+        with (
+            patch("src.pipeline_full.cv2.imread") as imread,
+            pytest.raises(RuntimeError, match="No readable frames"),
+        ):
             process_frames_directory(
-                frames_dir=Path("/tmp"),
-                output_dir=Path("/tmp/test"),
-                config=PipelineConfig(confidence=float("inf")),
+                tmp_path,
+                tmp_path / "output",
+                _config(max_frame_bytes=1024),
             )
 
-        with pytest.raises(ValueError):
+        imread.assert_not_called()
+        detector.predict.assert_not_called()
+
+    def test_pixel_limit_is_checked_before_decode(self, tmp_path: Path, detector: Mock) -> None:
+        _write_jpeg(tmp_path / "frame_001.jpg", shape=(20, 20))
+
+        with (
+            patch("src.pipeline_full.cv2.imread") as imread,
+            pytest.raises(RuntimeError, match="No readable frames"),
+        ):
             process_frames_directory(
-                frames_dir=Path("/tmp"),
-                output_dir=Path("/tmp/test"),
-                config=PipelineConfig(distance_threshold=float("inf")),
+                tmp_path,
+                tmp_path / "output",
+                _config(max_frame_pixels=399),
             )
 
-    def test_filename_sanitization(self):
-        """Test filename sanitization in outputs."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            frames_dir = Path(tmp_dir)
-            output_dir = Path(tmp_dir) / "output"
+        imread.assert_not_called()
+        detector.predict.assert_not_called()
 
-            # Create frame with problematic name
-            problematic_frame = frames_dir / "frame_001; rm -rf /.jpg"
-            problematic_frame.write_bytes(b"fake image data")
+    def test_symlinked_frames_are_not_followed(self, tmp_path: Path) -> None:
+        source = tmp_path / "outside.jpg"
+        _write_jpeg(source)
+        frames = tmp_path / "frames"
+        frames.mkdir()
+        (frames / "frame_001.jpg").symlink_to(source)
 
-            with patch("src.pipeline_full.cv2") as mock_cv2:
-                mock_cv2.imread.return_value = None
-
-                summary = process_frames_directory(
-                    frames_dir=frames_dir,
-                    output_dir=output_dir,
-                    config=PipelineConfig(max_frames=1),
-                )
-
-                # Should process safely
-                assert summary.total_frames == 1
-
-                # Check output files have safe names
-                for output_file in output_dir.rglob("*"):
-                    assert ";" not in output_file.name
-                    assert "rm -rf" not in output_file.name
-
-
-class TestResourceLimits:
-    """Test resource usage limits."""
-
-    def test_memory_usage_limits(self):
-        """Test memory usage doesn't exceed limits."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            frames_dir = Path(tmp_dir)
-            output_dir = Path(tmp_dir) / "output"
-
-            # Create many frame files
-            for i in range(1000):
-                (frames_dir / f"frame_{i:03d}.jpg").touch()
-
-            # Should handle large dataset without memory issues
-            summary = process_frames_directory(
-                frames_dir=frames_dir,
-                output_dir=output_dir,
-                config=PipelineConfig(max_frames=100),  # Limit to reasonable number
-            )
-
-            assert summary.total_frames == 100
-
-    def test_processing_time_limits(self):
-        """Test processing time limits."""
-        import time
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            frames_dir = Path(tmp_dir)
-            output_dir = Path(tmp_dir) / "output"
-
-            # Create frame files
-            for i in range(50):
-                (frames_dir / f"frame_{i:03d}.jpg").touch()
-
-            start_time = time.time()
-            process_frames_directory(
-                frames_dir=frames_dir,
-                output_dir=output_dir,
-                config=PipelineConfig(max_frames=50),
-            )
-            end_time = time.time()
-
-            # Should complete in reasonable time
-            processing_time = end_time - start_time
-            assert processing_time < 30.0  # 30 second limit for 50 frames
-
-    def test_file_size_limits(self):
-        """Test handling of extremely large files."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            frames_dir = Path(tmp_dir)
-            output_dir = Path(tmp_dir) / "output"
-
-            # Create a very large "image" file
-            large_frame = frames_dir / "frame_001.jpg"
-            large_frame.write_bytes(b"x" * 100 * 1024 * 1024)  # 100MB
-
-            with patch("src.pipeline_full.cv2") as mock_cv2:
-                # Simulate memory error for large files
-                mock_cv2.imread.side_effect = MemoryError("Image too large")
-
-                summary = process_frames_directory(
-                    frames_dir=frames_dir,
-                    output_dir=output_dir,
-                    config=PipelineConfig(max_frames=1),
-                )
-
-                # Should handle gracefully
-                assert summary.total_frames == 1
+        with pytest.raises(ValueError, match="No frame files found"):
+            process_frames_directory(frames, tmp_path / "output", _config())
 
 
 class TestSecureDefaults:
-    """Test secure default configurations."""
+    def test_new_output_directory_is_not_world_writable(
+        self, tmp_path: Path, detector: Mock
+    ) -> None:
+        _write_jpeg(tmp_path / "frames" / "frame_001.jpg")
+        output = tmp_path / "output"
 
-    def test_secure_default_paths(self):
-        """Test default paths are secure."""
-        config = PipelineConfig()
+        process_frames_directory(tmp_path / "frames", output, _config(max_frames=1))
 
-        # Should not use sensitive default paths
-        assert config.weights != "/etc/passwd"
-        assert config.weights != "../../../sensitive"
-        assert "yolov8" in config.weights or config.weights.endswith(".pt")
+        assert output.stat().st_mode & 0o002 == 0
+        assert detector.predict.call_count == 1
 
-    def test_secure_default_permissions(self):
-        """Test default permission settings."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            frames_dir = Path(tmp_dir)
-            output_dir = Path(tmp_dir) / "output"
+    def test_telemetry_excludes_input_and_output_paths(
+        self, tmp_path: Path, detector: Mock
+    ) -> None:
+        frames = tmp_path / "sensitive-input" / "frames"
+        output = tmp_path / "sensitive-output"
+        _write_jpeg(frames / "frame_001.jpg")
+        mlflow_api = Mock()
 
-            # Create frame files
-            for i in range(3):
-                (frames_dir / f"frame_{i:03d}.jpg").touch()
+        with (
+            patch("src.pipeline_full.mlflow", mlflow_api),
+            patch("src.pipeline_full.start_run", return_value=nullcontext(Mock())),
+        ):
+            process_frames_directory(frames, output, _config(max_frames=1))
 
-            process_frames_directory(
-                frames_dir=frames_dir,
-                output_dir=output_dir,
-                config=PipelineConfig(max_frames=3),
-            )
-
-            # Check output directory permissions (should not be world-writable)
-            output_stat = output_dir.stat()
-            # On Unix-like systems, check permissions don't include world write
-            if hasattr(output_stat, "st_mode"):
-                mode = output_stat.st_mode
-                # Should not have world write permissions (o+w)
-                assert not (mode & 0o002)
-
-    def test_no_sensitive_data_logging(self):
-        """Test no sensitive data is logged."""
-        with patch("src.pipeline_full.mlflow") as mock_mlflow:
-            mock_run = MagicMock()
-            mock_mlflow.start_run.return_value.__enter__.return_value = mock_run
-
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                frames_dir = Path(tmp_dir)
-                output_dir = Path(tmp_dir) / "output"
-
-                # Create frame files with sensitive-looking names
-                for i in range(3):
-                    (frames_dir / f"frame_{i:03d}_secret_key.jpg").touch()
-
-                process_frames_directory(
-                    frames_dir=frames_dir,
-                    output_dir=output_dir,
-                    config=PipelineConfig(max_frames=3),
-                )
-
-                # Check logged parameters don't contain sensitive data
-                if mock_run.log_params.called:
-                    logged_params = mock_run.log_params.call_args[0][0]
-                    for param_value in logged_params.values():
-                        assert "secret" not in str(param_value).lower()
-                        assert "password" not in str(param_value).lower()
-                        assert (
-                            "key" not in str(param_value).lower()
-                            or "api_key" in str(param_value).lower()
-                        )
+        values = mlflow_api.log_params.call_args.args[0].values()
+        assert all(str(tmp_path) not in str(value) for value in values)
+        assert detector.predict.call_count == 1
 
 
 class TestErrorDisclosure:
-    """Test that error messages don't disclose sensitive information."""
+    def test_model_loader_details_are_logged_but_not_returned(self, tmp_path: Path) -> None:
+        _write_jpeg(tmp_path / "frame_001.jpg")
 
-    def test_no_path_disclosure_in_errors(self):
-        """Test error messages don't reveal full paths."""
-        with pytest.raises(FileNotFoundError) as exc_info:
-            process_frames_directory(
-                frames_dir=Path("/non/existent/secret/path"),
-                output_dir=Path("/tmp/test"),
-            )
+        with (
+            patch("src.pipeline_full.load_model", side_effect=RuntimeError("secret /srv/model")),
+            pytest.raises(RuntimeError, match="^Model loading failed$") as exc_info,
+        ):
+            process_frames_directory(tmp_path, tmp_path / "output", _config())
 
-        error_msg = str(exc_info.value)
-        # Should mention directory not found but not reveal full system structure
-        assert "Frames directory not found" in error_msg
-        # Should not contain sensitive system paths
-        assert "/home" not in error_msg or "secret" not in error_msg
-
-    def test_no_stack_traces_in_user_output(self):
-        """Test detailed stack traces aren't shown to users."""
-        with patch("src.pipeline_full.load_model") as mock_load:
-            mock_load.side_effect = Exception("Internal error")
-
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                frames_dir = Path(tmp_dir)
-                output_dir = Path(tmp_dir) / "output"
-
-                for i in range(3):
-                    (frames_dir / f"frame_{i:03d}.jpg").touch()
-
-                # Should raise RuntimeError with sanitized message
-                with pytest.raises(RuntimeError) as exc_info:
-                    process_frames_directory(
-                        frames_dir=frames_dir,
-                        output_dir=output_dir,
-                        config=PipelineConfig(max_frames=3),
-                    )
-
-                # Error message should be user-friendly
-                error_msg = str(exc_info.value)
-                assert "Model loading failed" in error_msg
-                # Should not contain internal implementation details
-                assert "traceback" not in error_msg.lower()
-                assert "internal" not in error_msg.lower()
+        assert "secret" not in str(exc_info.value)

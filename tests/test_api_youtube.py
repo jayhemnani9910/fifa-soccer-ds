@@ -1,227 +1,275 @@
-"""
-Tests for YouTube Analyzer API endpoints.
+"""Contract tests for the canonical YouTube analysis API."""
 
-These tests verify the functionality of the FastAPI endpoints
-for YouTube video processing and analysis.
-"""
-
-import sys
-from pathlib import Path
+import asyncio
+from datetime import datetime
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+import httpx
+import pytest
 
-# Add src to path
-src_path = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(src_path))
+from src.api import main as api
 
-# Import the API app
-from src.api.youtube_endpoints import app
-
-# Create test client
-client = TestClient(app)
+pytestmark = pytest.mark.anyio
 
 
-class TestYouTubeAPI:
-    """Test suite for YouTube Analyzer API."""
-
-    def test_root_endpoint(self):
-        """Test the root endpoint returns API information."""
-        response = client.get("/")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "message" in data
-        assert "YouTube Analyzer API" in data["message"]
-        assert "endpoints" in data
-
-    def test_health_check(self):
-        """Test the health check endpoint."""
-        response = client.get("/health")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "healthy"
-        assert data["service"] == "youtube-analyzer"
-
-    def test_start_analysis_with_valid_url(self):
-        """Test starting analysis with a valid YouTube URL."""
-        test_request = {
-            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            "confidence_threshold": 0.8,
-        }
-
-        response = client.post("/analyze", json=test_request)
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "task_id" in data
-        assert data["status"] == "pending"
-        assert "Analysis started" in data["message"]
-
-    def test_start_analysis_with_invalid_url(self):
-        """Test starting analysis with an invalid URL."""
-        test_request = {"url": "invalid-url", "confidence_threshold": 0.8}
-
-        response = client.post("/analyze", json=test_request)
-
-        # Should still accept but may fail during processing
-        assert response.status_code == 200
-
-    def test_start_analysis_minimal_params(self):
-        """Test starting analysis with minimal parameters."""
-        test_request = {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
-
-        response = client.post("/analyze", json=test_request)
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "task_id" in data
-
-    def test_get_status_nonexistent_task(self):
-        """Test getting status for a task that doesn't exist."""
-        response = client.get("/status/nonexistent_task_123")
-
-        assert response.status_code == 404
-        assert "Task not found" in response.json()["detail"]
-
-    def test_get_results_nonexistent_task(self):
-        """Test getting results for a task that doesn't exist."""
-        response = client.get("/results/nonexistent_task_123")
-
-        assert response.status_code == 404
-        assert "Task not found" in response.json()["detail"]
-
-    def test_delete_nonexistent_task(self):
-        """Test deleting a task that doesn't exist."""
-        response = client.delete("/task/nonexistent_task_123")
-
-        assert response.status_code == 404
-        assert "Task not found" in response.json()["detail"]
-
-    def test_get_metadata_invalid_video_id(self):
-        """Test getting metadata for an invalid video ID."""
-        response = client.get("/metadata/invalid_video_id_123")
-
-        # This might return 500 if dependencies aren't available
-        # or 404 if video doesn't exist
-        assert response.status_code in [404, 500]
-
-    def test_download_nonexistent_results(self):
-        """Test downloading results for a task that doesn't exist."""
-        response = client.get("/download/nonexistent_task_123")
-
-        assert response.status_code == 404
-
-    @patch("src.api.youtube_endpoints.task_status")
-    def test_get_status_existing_task(self, mock_task_status):
-        """Test getting status for an existing task."""
-        # Mock task status
-        mock_task_status.get.return_value = {
-            "status": "processing",
-            "message": "Analyzing video...",
-            "progress": 0.5,
-        }
-
-        response = client.get("/status/test_task_123")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "processing"
-        assert data["progress"] == 0.5
-
-    def test_api_request_validation(self):
-        """Test API request validation for missing required fields."""
-        response = client.post("/analyze", json={})
-
-        # Should fail validation for missing URL
-        assert response.status_code == 422  # Pydantic validation error
+class FakeResult:
+    def model_dump(self, *, mode: str) -> dict[str, object]:
+        assert mode == "json"
+        return {"pipeline_version": "test", "errors": [], "warnings": []}
 
 
-class TestAPIIntegration:
-    """Integration tests for the YouTube API."""
+class FakeOrchestrator:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.config = {"pipeline": {"version": "test"}, "youtube": {"max_duration": 600}}
 
-    def test_full_analysis_workflow_simulation(self):
-        """Simulate a complete analysis workflow."""
-        # Start analysis
-        start_response = client.post(
-            "/analyze", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+    async def process_youtube_video(self, _request):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0)
+        if self.error is not None:
+            raise self.error
+        return FakeResult()
+
+
+@pytest.fixture()
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def isolated_api_state(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    api.task_storage.clear()
+    api.running_tasks.clear()
+    fake = FakeOrchestrator()
+    monkeypatch.setattr(api, "orchestrator", fake)
+    monkeypatch.setattr(api, "API_KEY", None)
+    yield fake
+    for task in tuple(api.running_tasks.values()):
+        task.cancel()
+    api.running_tasks.clear()
+    api.task_storage.clear()
+
+
+def _transport() -> httpx.ASGITransport:
+    return httpx.ASGITransport(app=api.app, raise_app_exceptions=False)
+
+
+async def test_root_and_health_endpoints() -> None:
+    with (
+        patch.object(api, "get_system_metrics", return_value={"cpu": 1.0}),
+        patch.object(api, "get_gpu_memory_usage", return_value=0),
+    ):
+        async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+            root = await client.get("/")
+            health = await client.get("/health")
+
+    assert root.status_code == 200
+    assert root.json()["service"] == "FIFA Soccer DS YouTube Analysis API"
+    assert health.status_code == 200
+    assert health.json()["status"] == "healthy"
+
+
+async def test_configured_api_key_protects_non_public_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api, "API_KEY", "test-secret")
+    with (
+        patch.object(api, "get_system_metrics", return_value={"cpu": 1.0}),
+        patch.object(api, "get_gpu_memory_usage", return_value=0),
+    ):
+        async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+            public_health = await client.get("/health")
+            missing = await client.get("/metrics")
+            accepted = await client.get("/metrics", headers={"X-API-Key": "test-secret"})
+
+    assert public_health.status_code == 200
+    assert missing.status_code == 401
+    assert accepted.status_code == 200
+
+
+async def test_tactical_compute_validates_teams_positions_and_grid_limits() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        one_team = await client.post(
+            "/tactical/compute",
+            json={
+                "players": [
+                    {"player_id": 1, "team_id": 0, "position": [0.2, 0.5]},
+                    {"player_id": 2, "team_id": 0, "position": [0.8, 0.5]},
+                ]
+            },
+        )
+        outside_pitch = await client.post(
+            "/tactical/compute",
+            json={
+                "players": [
+                    {"player_id": 1, "team_id": 0, "position": [1.2, 0.5]},
+                    {"player_id": 2, "team_id": 1, "position": [0.8, 0.5]},
+                ]
+            },
+        )
+        oversized_grid = await client.post(
+            "/tactical/compute",
+            json={
+                "players": [
+                    {"player_id": 1, "team_id": 0, "position": [0.2, 0.5]},
+                    {"player_id": 2, "team_id": 1, "position": [0.8, 0.5]},
+                ],
+                "grid_shape": [129, 129],
+            },
         )
 
-        assert start_response.status_code == 200
-        task_id = start_response.json()["task_id"]
-
-        # Check status (should be pending or processing)
-        status_response = client.get(f"/status/{task_id}")
-        assert status_response.status_code == 200
-
-        # Get results (should not be ready yet)
-        results_response = client.get(f"/results/{task_id}")
-        assert results_response.status_code == 400  # Not ready
-
-    def test_multiple_concurrent_requests(self):
-        """Test handling multiple concurrent analysis requests."""
-        requests = [{"url": f"https://www.youtube.com/watch?v=video{i}"} for i in range(3)]
-
-        responses = []
-        for req in requests:
-            response = client.post("/analyze", json=req)
-            responses.append(response)
-
-        # All should succeed
-        for response in responses:
-            assert response.status_code == 200
-            data = response.json()
-            assert "task_id" in data
+    assert one_team.status_code == 422
+    assert outside_pitch.status_code == 422
+    assert oversized_grid.status_code == 422
 
 
-class TestAPIErrorHandling:
-    """Test API error handling and edge cases."""
-
-    def test_malformed_json_request(self):
-        """Test handling of malformed JSON requests."""
-        response = client.post(
-            "/analyze", data="invalid json", headers={"Content-Type": "application/json"}
+async def test_tactical_compute_returns_measured_grid_for_both_teams() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        response = await client.post(
+            "/tactical/compute",
+            json={
+                "players": [
+                    {"player_id": 1, "team_id": 0, "position": [0.2, 0.5]},
+                    {"player_id": 2, "team_id": 1, "position": [0.8, 0.5]},
+                ],
+                "grid_shape": [4, 6],
+            },
         )
 
-        assert response.status_code == 422
-
-    def test_unsupported_content_type(self):
-        """Test handling of unsupported content types."""
-        response = client.post("/analyze", data="some text", headers={"Content-Type": "text/plain"})
-
-        assert response.status_code == 422
-
-    def test_very_long_url(self):
-        """Test handling of extremely long URLs."""
-        long_url = "https://www.youtube.com/watch?v=" + "a" * 1000
-        response = client.post("/analyze", json={"url": long_url})
-
-        # Should handle gracefully (may succeed or fail with validation error)
-        assert response.status_code in [200, 422, 413]  # 413 = Payload too large
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["pitch_control"]["grid"]) == 4
+    assert len(payload["pitch_control"]["grid"][0]) == 6
 
 
-if __name__ == "__main__":
-    # Run basic smoke tests
-    print("Running YouTube API smoke tests...")
+async def test_analysis_task_completes_and_returns_results() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        response = await client.post(
+            "/analyze",
+            json={"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+        )
+        assert response.status_code == 200
+        task_id = response.json()["task_id"]
 
-    # Test basic endpoints
-    try:
-        response = client.get("/")
-        print(f"✅ Root endpoint: {response.status_code}")
-    except Exception as e:
-        print(f"❌ Root endpoint failed: {e}")
+        for _ in range(10):
+            status = await client.get(f"/tasks/{task_id}")
+            if status.json()["status"] == "completed":
+                break
+            await asyncio.sleep(0)
 
-    try:
-        response = client.get("/health")
-        print(f"✅ Health check: {response.status_code}")
-    except Exception as e:
-        print(f"❌ Health check failed: {e}")
+    assert status.status_code == 200
+    payload = status.json()
+    assert payload["status"] == "completed"
+    assert payload["results"]["pipeline_version"] == "test"
 
-    try:
-        response = client.post("/analyze", json={"url": "https://www.youtube.com/watch?v=test"})
-        print(f"✅ Analysis start: {response.status_code}")
-    except Exception as e:
-        print(f"❌ Analysis start failed: {e}")
 
-    print("Smoke tests completed!")
+@pytest.mark.parametrize(
+    "url",
+    [
+        "invalid-url",
+        "http://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "https://example.com/watch?v=dQw4w9WgXcQ",
+        "https://user:secret@youtube.com/watch?v=dQw4w9WgXcQ",
+    ],
+)
+async def test_analysis_rejects_untrusted_urls(url: str) -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        response = await client.post("/analyze", json={"youtube_url": url})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"youtube_url": "https://youtu.be/dQw4w9WgXcQ", "confidence_threshold": 1.1},
+        {"youtube_url": "https://youtu.be/dQw4w9WgXcQ", "sample_duration": 0},
+        {"youtube_url": "https://youtu.be/dQw4w9WgXcQ", "output_dir": "../escape"},
+    ],
+)
+async def test_analysis_request_bounds(payload: dict[str, object]) -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        response = await client.post("/analyze", json=payload)
+
+    assert response.status_code == 422
+
+
+async def test_missing_tasks_return_sanitized_404() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        get_response = await client.get("/tasks/not-present")
+        delete_response = await client.delete("/tasks/not-present")
+
+    assert get_response.status_code == 404
+    assert get_response.json()["error"]["message"] == "Task not found"
+    assert delete_response.status_code == 404
+
+
+async def test_active_task_limit_is_enforced() -> None:
+    for index in range(api.MAX_ACTIVE_TASKS):
+        task_id = f"existing-{index}"
+        api.task_storage[task_id] = api.TaskStatus(
+            task_id=task_id,
+            status="processing",
+            progress=0.5,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        response = await client.post(
+            "/analyze",
+            json={"youtube_url": "https://youtu.be/dQw4w9WgXcQ"},
+        )
+
+    assert response.status_code == 429
+
+
+async def test_processing_errors_do_not_disclose_exception_details(
+    isolated_api_state: FakeOrchestrator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert isolated_api_state is not None
+    monkeypatch.setattr(api, "orchestrator", FakeOrchestrator(RuntimeError("secret /srv/path")))
+
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        response = await client.post(
+            "/analyze",
+            json={"youtube_url": "https://youtu.be/dQw4w9WgXcQ"},
+        )
+        task_id = response.json()["task_id"]
+        for _ in range(10):
+            status = await client.get(f"/tasks/{task_id}")
+            if status.json()["status"] == "error":
+                break
+            await asyncio.sleep(0)
+
+    payload = status.json()
+    assert payload["status"] == "error"
+    assert payload["error_details"] == "Processing failed; consult server logs"
+    assert "secret" not in str(payload)
+
+
+async def test_pending_task_can_be_cancelled() -> None:
+    task_id = "pending-task"
+    api.task_storage[task_id] = api.TaskStatus(
+        task_id=task_id,
+        status="pending",
+        progress=0.0,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    background = asyncio.create_task(asyncio.sleep(60))
+    api.running_tasks[task_id] = background
+
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        response = await client.delete(f"/tasks/{task_id}")
+
+    assert response.status_code == 200
+    assert api.task_storage[task_id].status == "cancelled"
+    assert background.cancelled() or background.cancelling()
+
+
+def test_legacy_module_exports_canonical_app() -> None:
+    from src.api.youtube_endpoints import app
+
+    assert app is api.app

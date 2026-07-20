@@ -1,14 +1,30 @@
 from __future__ import annotations
 
+import asyncio
 import queue
 import threading
 import time
 
+import httpx
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
 
 from src.live.barca_api import BarcaAPIServer
+
+
+@pytest.fixture(autouse=True)
+def _run_thread_offloads_inline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep API tests deterministic in runtimes where asyncio workers are unavailable."""
+
+    async def run_inline(function, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr("src.live.barca_api.asyncio.to_thread", run_inline)
+
+
+@pytest.fixture()
+def anyio_backend() -> str:
+    return "asyncio"
 
 
 class DummyBoxes:
@@ -80,7 +96,9 @@ def api_server():  # type: ignore[no-untyped-def]
         return FakeDetector()  # type: ignore[name-defined]
 
     server = BarcaAPIServer(
-        detector_factory=fake_detector_factory, capture_factory=fake_capture_factory
+        detector_factory=fake_detector_factory,
+        capture_factory=fake_capture_factory,
+        target_validator=lambda _url: None,
     )  # type: ignore[arg-type]
     server.checkpoint_metadata = {"commit": "abc123", "mAP@0.5": 0.52, "data_version": 3}
     yield server
@@ -99,41 +117,62 @@ def api_server():  # type: ignore[no-untyped-def]
     time.sleep(0.1)  # Allow threads to fully terminate
 
 
-def test_api_start_stop(api_server: BarcaAPIServer) -> None:  # type: ignore[name-defined]
-    client = TestClient(api_server.app)
-    response = client.post("/stream/start", json={"rtsp_url": "rtsp://example"})
-    assert response.status_code == 200
+@pytest.mark.anyio
+async def test_api_start_stop(api_server: BarcaAPIServer) -> None:  # type: ignore[name-defined]
+    transport = httpx.ASGITransport(app=api_server.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/stream/start", json={"rtsp_url": "rtsp://example"})
+        assert response.status_code == 200
+        await asyncio.sleep(0.15)
 
-    time.sleep(0.15)
+        detections = (await client.get("/detections")).json()
+        assert "detections" in detections
 
-    detections = client.get("/detections").json()
-    assert "detections" in detections
+        checkpoint = (await client.get("/checkpoint")).json()
+        assert checkpoint["commit"] == "abc123"
 
-    checkpoint = client.get("/checkpoint").json()
-    assert checkpoint["commit"] == "abc123"
+        stop = await client.post("/stream/stop")
+        assert stop.status_code == 200
 
-    stop = client.post("/stream/stop")
-    assert stop.status_code == 200
-
-    time.sleep(0.1)
-    health = client.get("/health").json()
-    assert health["streaming"] is False
+        health = (await client.get("/health")).json()
+        assert health["streaming"] is False
 
 
-def test_api_detection_latency(api_server: BarcaAPIServer) -> None:  # type: ignore[name-defined]
-    client = TestClient(api_server.app)
-    client.post("/stream/start", json={"rtsp_url": "rtsp://example"})
+def test_inference_loop_without_capture_records_error(api_server: BarcaAPIServer) -> None:
+    api_server._capture = None
 
-    latency_ms = None
-    for _ in range(30):
-        payload = client.get("/detections").json()
-        if payload.get("detections"):
-            latency_ms = payload.get("latency_ms")
-            break
-        time.sleep(0.05)
+    api_server._inference_loop()
 
-    assert latency_ms is not None
-    assert latency_ms >= 0.0
+    assert api_server._last_error == "Inference loop started without an active capture"
 
-    client.post("/stream/stop")
-    time.sleep(0.1)
+
+@pytest.mark.anyio
+async def test_api_detection_latency(api_server: BarcaAPIServer) -> None:  # type: ignore[name-defined]
+    transport = httpx.ASGITransport(app=api_server.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/stream/start", json={"rtsp_url": "rtsp://example"})
+        assert response.status_code == 200
+
+        latency_ms = None
+        for _ in range(30):
+            payload = (await client.get("/detections")).json()
+            if payload.get("detections"):
+                latency_ms = payload.get("latency_ms")
+                break
+            await asyncio.sleep(0.05)
+
+        assert latency_ms is not None
+        assert latency_ms >= 0.0
+
+        stop = await client.post("/stream/stop")
+        assert stop.status_code == 200
+
+
+def test_frame_ids_are_monotonic_across_batches(api_server: BarcaAPIServer) -> None:
+    detector = FakeDetector()
+    frame = np.ones((8, 8, 3), dtype=np.uint8)
+
+    first = api_server._run_detector(detector, [frame, frame])
+    second = api_server._run_detector(detector, [frame])
+
+    assert [item["frame_id"] for item in first + second] == [0, 1, 2]

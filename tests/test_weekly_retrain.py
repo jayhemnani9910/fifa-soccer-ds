@@ -3,9 +3,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import torch
 
+import src.train.weekly_retrainer as retrainer_module
 from src.train.weekly_retrainer import WeeklyRetrainer
+
+
+@pytest.fixture(autouse=True)
+def isolate_dvc_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep retrainer unit tests independent of the external DVC repository."""
+    monkeypatch.setattr(
+        retrainer_module,
+        "version_data_with_dvc",
+        lambda *_args, **_kwargs: {"dataset_hash": "fixture-dataset-hash"},
+    )
 
 
 class FakeLoader:
@@ -147,3 +159,21 @@ def test_retrain_exit_code(tmp_path: Path) -> None:
 
     exit_code_failure = failing_retrainer.schedule_retrain()
     assert exit_code_failure == 1
+
+
+def test_retrainer_rejects_missing_validation_loss(tmp_path: Path) -> None:
+    def invalid_trainer(*_args, **_kwargs):
+        return {"best_checkpoint": None}
+
+    retrainer = WeeklyRetrainer(
+        data_loader=FakeLoader(tmp_path / "cache"),
+        train_loader=[],
+        val_loader=[],
+        test_loader=None,
+        adapter_factory=DummyAdapter,
+        trainer_fn=invalid_trainer,
+        version_file=tmp_path / "version.json",
+    )
+
+    with pytest.raises(RuntimeError, match="finite validation loss"):
+        retrainer.run_fine_tune_loop()

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import csv
+import subprocess
+import zipfile
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from src.data.la_liga_loader import KaggleDataLoader, extract_frames_from_video
+import src.data.la_liga_loader as loader_module
+from src.data.la_liga_loader import (
+    DVCRegistrationError,
+    KaggleDataLoader,
+    extract_frames_from_video,
+)
 
 
 def _write_sample_video(video_path: Path, total_frames: int = 5) -> None:
@@ -92,3 +99,47 @@ def test_extract_frames_counts_expected_frames(tmp_path: Path) -> None:
     for frame_path in frames:
         assert frame_path.exists()
         assert frame_path.parent == frames_dir.resolve()
+
+
+def test_dataset_archive_rejects_path_traversal(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    archive = cache_dir / "unsafe.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("../escaped.txt", "unsafe")
+    loader = KaggleDataLoader(dataset="user/example", cache_dir=cache_dir)
+
+    with pytest.raises(ValueError, match="Unsafe path"):
+        loader._maybe_unzip(archive)
+
+    assert not (tmp_path / "escaped.txt").exists()
+
+
+def test_metadata_paths_cannot_escape_dataset_cache(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    csv_path = tmp_path / "metadata.csv"
+    csv_path.write_text(
+        "match_id,home_team,away_team,video_path\n1,Home,Away,../outside.mp4\n",
+        encoding="utf-8",
+    )
+    loader = KaggleDataLoader(dataset="user/example", cache_dir=cache_dir)
+
+    with pytest.raises(ValueError, match="must stay within dataset cache"):
+        loader.load_metadata(csv_path)
+
+
+def test_dvc_registration_failure_is_not_reported_as_versioned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(loader_module.shutil, "which", lambda _name: "/usr/bin/dvc")
+    monkeypatch.setattr(
+        loader_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["dvc", "add"], returncode=1, stdout="", stderr="not a DVC repository"
+        ),
+    )
+
+    with pytest.raises(DVCRegistrationError, match="not a DVC repository"):
+        loader_module._run_dvc_add(tmp_path)

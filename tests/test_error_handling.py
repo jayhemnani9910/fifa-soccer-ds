@@ -3,11 +3,19 @@
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import cv2
+import numpy as np
 import pytest
 
 from src.pipeline_full import PipelineConfig, process_frames_directory
+
+
+def _write_frames(frames_dir: Path, count: int) -> None:
+    image = np.zeros((16, 16, 3), dtype=np.uint8)
+    for index in range(count):
+        assert cv2.imwrite(str(frames_dir / f"frame_{index:03d}.jpg"), image)
 
 
 class TestPipelineErrorHandling:
@@ -33,7 +41,7 @@ class TestPipelineErrorHandling:
     def test_invalid_confidence_values(self):
         """Test validation of confidence thresholds."""
         # Test confidence > 1
-        with pytest.raises(ValueError, match="Confidence must be between 0 and 1"):
+        with pytest.raises(ValueError, match="confidence must be a finite value between 0 and 1"):
             process_frames_directory(
                 frames_dir=Path("/tmp"),
                 output_dir=Path("/tmp/test"),
@@ -41,7 +49,7 @@ class TestPipelineErrorHandling:
             )
 
         # Test confidence < 0
-        with pytest.raises(ValueError, match="Confidence must be between 0 and 1"):
+        with pytest.raises(ValueError, match="confidence must be a finite value between 0 and 1"):
             process_frames_directory(
                 frames_dir=Path("/tmp"),
                 output_dir=Path("/tmp/test"),
@@ -49,7 +57,9 @@ class TestPipelineErrorHandling:
             )
 
         # Test min_confidence > 1
-        with pytest.raises(ValueError, match="Min confidence must be between 0 and 1"):
+        with pytest.raises(
+            ValueError, match="min_confidence must be a finite value between 0 and 1"
+        ):
             process_frames_directory(
                 frames_dir=Path("/tmp"),
                 output_dir=Path("/tmp/test"),
@@ -80,15 +90,12 @@ class TestPipelineErrorHandling:
             # Create a dummy frame file
             (frames_dir / "frame_001.jpg").touch()
 
-            # Should not raise error, but should log warning
-            summary = process_frames_directory(
-                frames_dir=frames_dir,
-                output_dir=output_dir,
-                config=PipelineConfig(max_frames=1),
-            )
-
-            assert summary.total_frames == 1
-            assert summary.total_detections == 0
+            with pytest.raises(RuntimeError, match="No readable frames"):
+                process_frames_directory(
+                    frames_dir=frames_dir,
+                    output_dir=output_dir,
+                    config=PipelineConfig(max_frames=1),
+                )
 
     @patch("src.pipeline_full.load_model")
     def test_model_loading_failure(self, mock_load_model):
@@ -147,42 +154,38 @@ class TestPipelineErrorHandling:
                     config=PipelineConfig(max_frames=3),
                 )
 
-    @patch("src.pipeline_full.mlflow")
-    def test_mlflow_logging_failure(self, mock_mlflow):
+    @patch("src.pipeline_full.load_model", return_value=Mock(predict=lambda *_args, **_kwargs: []))
+    @patch("src.pipeline_full.start_run", side_effect=Exception("MLflow connection failed"))
+    def test_mlflow_logging_failure(self, _mock_start_run, _mock_load_model):
         """Test graceful handling of MLflow logging failure."""
-        mock_mlflow.start_run.side_effect = Exception("MLflow connection failed")
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             frames_dir = Path(tmp_dir)
             output_dir = Path(tmp_dir) / "output"
 
-            # Create dummy frame files
-            for i in range(3):
-                (frames_dir / f"frame_{i:03d}.jpg").touch()
+            _write_frames(frames_dir, 3)
 
             # Should not raise error, but should continue without MLflow
             summary = process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
-                config=PipelineConfig(max_frames=3),
+                config=PipelineConfig(max_frames=3, enable_tactical_analytics=False),
             )
 
             assert summary.total_frames == 3
 
-    def test_pipeline_summary_serialization(self):
+    @patch("src.pipeline_full.load_model", return_value=Mock(predict=lambda *_args, **_kwargs: []))
+    def test_pipeline_summary_serialization(self, _mock_load_model):
         """Test that pipeline summary can be properly serialized."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             frames_dir = Path(tmp_dir)
             output_dir = Path(tmp_dir) / "output"
 
-            # Create dummy frame files
-            for i in range(3):
-                (frames_dir / f"frame_{i:03d}.jpg").touch()
+            _write_frames(frames_dir, 3)
 
             process_frames_directory(
                 frames_dir=frames_dir,
                 output_dir=output_dir,
-                config=PipelineConfig(max_frames=3),
+                config=PipelineConfig(max_frames=3, enable_tactical_analytics=False),
             )
 
             # Verify summary file exists and is valid JSON

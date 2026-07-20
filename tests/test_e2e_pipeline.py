@@ -4,7 +4,7 @@ This module tests the complete pipeline flow from YouTube URL input
 to final analysis output, ensuring all components work together.
 """
 
-import json
+import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -32,7 +32,7 @@ class TestEndToEndPipeline:
     def mock_video_info(self):
         """Mock video information for testing."""
         return {
-            "id": "test123",
+            "id": "test123abcd",
             "title": "Barcelona vs Real Madrid - El Clasico Highlights",
             "description": "Amazing goals and skills from both teams",
             "duration": 300,
@@ -51,11 +51,12 @@ class TestEndToEndPipeline:
         }
 
     @pytest.fixture
-    def test_request(self, temp_dir):
+    def test_request(self, temp_dir, monkeypatch):
         """Create test YouTube analysis request."""
+        monkeypatch.setenv("ANALYSIS_OUTPUT_ROOT", str(temp_dir))
         return YouTubeAnalysisRequest(
-            url="https://www.youtube.com/watch?v=test123",
-            output_dir=str(temp_dir),
+            url="https://www.youtube.com/watch?v=test123abcd",
+            output_dir="e2e",
             frame_rate=1.0,
             max_duration=300,
             include_audio=True,
@@ -69,67 +70,56 @@ class TestEndToEndPipeline:
         assert hasattr(orchestrator, "process_youtube_video")
         assert hasattr(orchestrator, "config")
 
-    @pytest.mark.asyncio
-    async def test_pipeline_orchestrator_with_mock_data(self, test_request, mock_video_info):
-        """Test orchestrator with mocked external dependencies."""
-        with (
-            patch("src.youtube.video_downloader.YouTubeDownloader") as mock_downloader,
-            patch("src.youtube.audio_extractor.AudioExtractor") as mock_audio,
-            patch("src.youtube.metadata_parser.YouTubeMetadataParser") as mock_metadata,
-            patch("src.classify.soccer_classifier.SoccerClassifier") as mock_classifier,
-        ):
-            # Setup mocks
-            mock_downloader_instance = Mock()
-            mock_downloader.return_value = mock_downloader_instance
-            mock_downloader_instance.download_video.return_value = {
-                "video_path": "/fake/path/video.mp4",
-                "audio_path": "/fake/path/audio.wav",
-            }
+    def test_pipeline_orchestrator_with_mock_data(self, test_request, mock_video_info):
+        """Test the async boundary and evidence-to-schema conversion."""
 
-            mock_audio_instance = Mock()
-            mock_audio.return_value = mock_audio_instance
-            mock_audio_instance.process_sample_audio.return_value = {
+        def fake_processor(_url, output_dir, *_args, **_kwargs):
+            (output_dir / "youtube_analysis.json").write_text("{}", encoding="utf-8")
+            return {
+                "type": "soccer",
                 "classification": {
                     "is_soccer": True,
-                    "confidence": 0.85,
-                    "soccer_keywords": ["goal", "soccer", "football"],
-                }
-            }
-
-            mock_metadata_instance = Mock()
-            mock_metadata.return_value = mock_metadata_instance
-            mock_metadata_instance.extract_metadata.return_value = mock_video_info
-            mock_metadata_instance.predict_soccer_content.return_value = {
-                "is_soccer": True,
-                "confidence": 0.90,
-                "relevance_level": "high",
-                "content_type": "highlights",
-                "reasoning": ["High keyword relevance", "Soccer-related channel"],
-            }
-
-            mock_classifier_instance = Mock()
-            mock_classifier.return_value = mock_classifier_instance
-            mock_classifier_instance.classify_youtube_content.return_value = {
-                "is_soccer": True,
-                "confidence": 0.88,
-                "classification": "highly_soccer",
-                "analysis_breakdown": {
-                    "metadata_analysis": {"score": 0.90},
-                    "thumbnail_analysis": {"score": 0.85},
-                    "audio_analysis": {"is_soccer": True, "confidence": 0.85},
+                    "confidence": 0.88,
+                    "analysis_breakdown": {"metadata_analysis": {"content_type": "highlights"}},
+                    "processing_info": {"video_info": mock_video_info},
+                },
+                "pipeline_summary": {
+                    "total_frames": 3,
+                    "attempted_frames": 4,
+                    "successful_frames": 3,
+                    "processing_success_rate": 0.75,
+                    "failures": {
+                        "unreadable_frames": 1,
+                        "detection_failures": 0,
+                        "tracking_failures": 0,
+                        "overlay_failures": 0,
+                    },
+                    "total_detections": 6,
+                    "unique_track_ids": [1, 2],
+                    "graph_nodes": 6,
+                    "graph_edges": 4,
                 },
             }
 
-            # Create orchestrator and process
-            orchestrator = PipelineOrchestrator()
-            result = await orchestrator.process_youtube_video(test_request)
+        orchestrator = PipelineOrchestrator(processor=fake_processor)
 
-            # Verify result structure
-            assert isinstance(result, PipelineOutput)
-            assert result.input_source == "youtube"
-            assert result.soccer_classification.is_soccer
-            assert result.soccer_classification.soccer_confidence > 0.8
-            assert len(result.output_files) > 0
+        async def inline_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with patch("src.pipeline_orchestrator.asyncio.to_thread", side_effect=inline_to_thread):
+            result = asyncio.run(orchestrator.process_youtube_video(test_request))
+
+        assert isinstance(result, PipelineOutput)
+        assert result.input_source == "youtube"
+        assert result.soccer_classification.is_soccer
+        assert result.soccer_classification.soccer_confidence > 0.8
+        assert result.soccer_classification.total_events is None
+        assert result.soccer_classification.detection_quality is None
+        assert result.soccer_classification.processing_success_rate == 0.75
+        assert any("partial frame failures" in warning for warning in result.warnings)
+        assert result.player_analysis.total_players_detected == 2
+        assert result.player_analysis.avg_track_length is None
+        assert result.output_files["analysis"].endswith("youtube_analysis.json")
 
     def test_youtube_analysis_request_validation(self):
         """Test YouTube analysis request schema validation."""
@@ -152,34 +142,40 @@ class TestEndToEndPipeline:
 
         # Test with valid data
         metadata = parser._create_validated_metadata(mock_video_info)
-        assert metadata.video_id == "test123"
+        assert metadata.video_id == "test123abcd"
         assert metadata.title == "Barcelona vs Real Madrid - El Clasico Highlights"
         assert metadata.duration_seconds == 300
         assert metadata.fps == 30.0
 
-        # Test with missing data (should use defaults)
-        incomplete_data = {"id": "test456", "title": "Test Video"}
+        # Test with missing data (unavailable values remain explicit)
+        incomplete_data = {"id": "test456abcd", "title": "Test Video"}
         metadata = parser._create_validated_metadata(incomplete_data)
-        assert metadata.video_id == "test456"
+        assert metadata.video_id == "test456abcd"
         assert metadata.title == "Test Video"
-        assert metadata.duration_seconds == 0  # Default
+        assert metadata.duration_seconds is None
 
     def test_soccer_classifier_validation(self):
         """Test soccer classifier input validation."""
         classifier = SoccerClassifier()
 
         # Valid URL
-        with patch("src.youtube.metadata_parser.YouTubeMetadataParser") as mock_parser:
+        with patch.object(
+            classifier,
+            "_analyze_thumbnail",
+            return_value={"visual_score": 0.8, "confidence": 0.8},
+        ):
             mock_instance = Mock()
-            mock_parser.return_value = mock_instance
             mock_instance.extract_metadata.return_value = {"title": "Soccer Goals"}
             mock_instance.predict_soccer_content.return_value = {
                 "is_soccer": True,
                 "confidence": 0.9,
                 "relevance_level": "high",
             }
+            classifier.metadata_parser = mock_instance
 
-            result = classifier.classify_youtube_content("https://youtube.com/watch?v=test")
+            result = classifier.classify_youtube_content(
+                "https://youtube.com/watch?v=test123abcd", include_audio=False
+            )
             assert result["is_soccer"]
             assert result["confidence"] > 0.8
 
@@ -187,62 +183,43 @@ class TestEndToEndPipeline:
         with pytest.raises(ValueError):
             classifier.classify_youtube_content("invalid-url")
 
-    def test_pipeline_output_structure(self, temp_dir, mock_video_info):
-        """Test that pipeline produces expected output files."""
-        # Create minimal pipeline output
+    def test_pipeline_output_schema_roundtrip(self, temp_dir, mock_video_info):
+        """Test that a pipeline response survives a JSON schema round trip."""
         output = PipelineOutput(
             pipeline_version="1.0.0",
             processing_timestamp=mock_video_info.get("upload_date"),
             processing_duration_seconds=120.0,
             input_source="youtube",
-            input_url="https://youtube.com/watch?v=test",
+            input_url="https://youtube.com/watch?v=test123abcd",
             input_metadata=YouTubeMetadataParser()._create_validated_metadata(mock_video_info),
             soccer_classification=SoccerClassification(
                 is_soccer=True,
                 soccer_confidence=0.85,
-                content_type="highlights",
-                total_events=3,
-                detection_quality=0.9,
-                processing_success_rate=0.95,
+                content_type="highlight",
+                total_events=None,
+                detection_quality=None,
+                processing_success_rate=None,
             ),
             player_analysis=PlayerAnalysis(
-                total_players_detected=22, teams_detected=2, avg_track_length=120.0
+                total_players_detected=0, teams_detected=0, avg_track_length=None
             ),
             output_files={
-                "detections": str(temp_dir / "detections.parquet"),
-                "tracklets": str(temp_dir / "tracklets.parquet"),
-                "graph": str(temp_dir / "graph.pt"),
-                "metrics": str(temp_dir / "metrics.json"),
+                "pipeline_summary": str(temp_dir / "pipeline_summary.json"),
+                "graph": str(temp_dir / "graphs" / "final_graph.json"),
             },
         )
 
-        # Verify all required fields are present
-        assert output.pipeline_version is not None
-        assert output.processing_duration_seconds > 0
-        assert output.input_source in ["youtube", "frame_directory", "video_file"]
-        assert output.soccer_classification.is_soccer is not None
-        assert output.soccer_classification.soccer_confidence is not None
-        assert len(output.output_files) > 0
+        restored = PipelineOutput.model_validate_json(output.model_dump_json())
 
-        # Verify output files are created
-        for file_path in output.output_files.values():
-            Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(file_path).touch()
-            assert Path(file_path).exists()
+        assert restored == output
+        assert restored.soccer_classification.total_events is None
+        assert restored.player_analysis.avg_track_length is None
 
-    @pytest.mark.asyncio
-    async def test_error_handling_in_pipeline(self, test_request):
+    def test_error_handling_in_pipeline(self, test_request):
         """Test pipeline error handling and recovery."""
-        orchestrator = PipelineOrchestrator()
-
         # Test with invalid URL
-        invalid_request = YouTubeAnalysisRequest(
-            url="https://invalid-url.com", output_dir="test_output"
-        )
-
-        # Should handle error gracefully
         with pytest.raises(Exception):
-            await orchestrator.process_youtube_video(invalid_request)
+            YouTubeAnalysisRequest(url="https://invalid-url.com", output_dir="test_output")
 
     def test_configuration_loading(self):
         """Test pipeline configuration loading."""
@@ -256,38 +233,14 @@ class TestEndToEndPipeline:
         """Test health check integration."""
         from src.utils.health_checks import health_check
 
-        # Basic health check should not raise exception
-        result = health_check()
-        assert isinstance(result, dict)
-        assert "status" in result
-        assert result["status"] in ["healthy", "degraded", "unhealthy"]
+        async def healthy_operation():
+            return {"status": "healthy"}
+
+        result = asyncio.run(health_check(healthy_operation)())
+        assert result == {"status": "healthy"}
 
 
-class TestPipelineArtifacts:
-    """Test that pipeline produces expected artifacts."""
-
-    def test_output_artifacts_structure(self, temp_dir):
-        """Test that all expected output artifacts are created."""
-        # Simulate pipeline output creation
-        artifacts = {
-            "detections.parquet": {"frame_id": [1, 2, 3], "confidence": [0.9, 0.8, 0.7]},
-            "tracklets.parquet": {"track_id": [1, 2], "duration": [120, 90]},
-            "graph.pt": {"nodes": 22, "edges": 45},
-            "metrics.json": {"frames_processed": 300, "detection_accuracy": 0.89},
-        }
-
-        for filename, data in artifacts.items():
-            file_path = temp_dir / filename
-
-            if filename.endswith(".json"):
-                with open(file_path, "w") as f:
-                    json.dump(data, f)
-            else:
-                # Create placeholder for parquet/graph files
-                file_path.touch()
-
-            assert file_path.exists()
-
+class TestPipelineMetrics:
     def test_metrics_collection(self):
         """Test that metrics are properly collected."""
         from src.utils.monitoring import get_gpu_memory_usage, get_system_metrics
@@ -297,7 +250,7 @@ class TestPipelineArtifacts:
 
         assert isinstance(gpu_memory, int | float)
         assert isinstance(system_metrics, dict)
-        assert "cpu_percent" in system_metrics
+        assert "cpu_usage_percent" in system_metrics
         assert "memory_percent" in system_metrics
 
 

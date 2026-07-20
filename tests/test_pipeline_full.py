@@ -51,6 +51,18 @@ class DummyYOLO:
         return [DummyResult()]
 
 
+class PartialFailureYOLO(DummyYOLO):
+    def __init__(self, weights: str):
+        super().__init__(weights)
+        self.calls = 0
+
+    def predict(self, source, conf: float = 0.25, verbose: bool = False):
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("synthetic detector failure")
+        return super().predict(source, conf=conf, verbose=verbose)
+
+
 @pytest.mark.smoke
 def test_pipeline_processes_single_frame(tmp_path: Path, monkeypatch):
     """Test pipeline runs end-to-end with minimal input."""
@@ -89,5 +101,44 @@ def test_pipeline_processes_single_frame(tmp_path: Path, monkeypatch):
     with (output_dir / "pipeline_summary.json").open() as f:
         data = json.load(f)
         assert data["total_frames"] == 1
+        assert data["attempted_frames"] == 1
+        assert data["successful_frames"] == 1
+        assert data["processing_success_rate"] == 1.0
+        assert data["partial_failure"] is False
+        assert data["failures"] == {
+            "unreadable_frames": 0,
+            "detection_failures": 0,
+            "tracking_failures": 0,
+            "overlay_failures": 0,
+        }
         assert data["total_detections"] == 1
         assert "config" in data
+
+
+def test_pipeline_reports_partial_frame_failures(tmp_path: Path, monkeypatch) -> None:
+    import cv2
+    import numpy as np
+
+    import src.detect.infer as detect_infer
+
+    monkeypatch.setattr(detect_infer, "YOLO", PartialFailureYOLO)
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    for frame_id in range(2):
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        cv2.imwrite((frames_dir / f"frame_{frame_id:06d}.jpg").as_posix(), frame)
+
+    output_dir = tmp_path / "output"
+    summary = process_frames_directory(
+        frames_dir,
+        output_dir,
+        PipelineConfig(max_frames=2),
+    )
+    payload = json.loads((output_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
+
+    assert summary.attempted_frames == 2
+    assert summary.successful_frames == 1
+    assert summary.detection_failures == 1
+    assert payload["partial_failure"] is True
+    assert payload["processing_success_rate"] == 0.5
+    assert payload["failures"]["detection_failures"] == 1
