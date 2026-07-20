@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from src.classify.soccer_classifier import SoccerClassifier
-from src.pipeline_orchestrator import PipelineOrchestrator
+from src.pipeline_orchestrator import PipelineOrchestrator, WeightsNotConfiguredError
 from src.schemas import PipelineOutput, PlayerAnalysis, SoccerClassification, YouTubeAnalysisRequest
 from src.youtube.metadata_parser import YouTubeMetadataParser
 
@@ -54,6 +54,9 @@ class TestEndToEndPipeline:
     def test_request(self, temp_dir, monkeypatch):
         """Create test YouTube analysis request."""
         monkeypatch.setenv("ANALYSIS_OUTPUT_ROOT", str(temp_dir))
+        weights = temp_dir / "yolov8n.pt"
+        weights.write_bytes(b"dummy-checkpoint-bytes")
+        monkeypatch.setenv("YOLO_WEIGHTS", str(weights))
         return YouTubeAnalysisRequest(
             url="https://www.youtube.com/watch?v=test123abcd",
             output_dir="e2e",
@@ -120,6 +123,18 @@ class TestEndToEndPipeline:
         assert result.player_analysis.total_players_detected == 2
         assert result.player_analysis.avg_track_length is None
         assert result.output_files["analysis"].endswith("youtube_analysis.json")
+
+    def test_process_youtube_video_requires_configured_weights(self, test_request, monkeypatch):
+        """Regression test: unset YOLO_WEIGHTS must not silently fall back to a bundled default."""
+        monkeypatch.delenv("YOLO_WEIGHTS", raising=False)
+
+        def _unreachable_processor(*_args, **_kwargs):
+            raise AssertionError("processor must not run when weights are unconfigured")
+
+        orchestrator = PipelineOrchestrator(processor=_unreachable_processor)
+
+        with pytest.raises(WeightsNotConfiguredError, match="YOLO_WEIGHTS"):
+            asyncio.run(orchestrator.process_youtube_video(test_request))
 
     def test_youtube_analysis_request_validation(self):
         """Test YouTube analysis request schema validation."""

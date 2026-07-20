@@ -45,6 +45,31 @@ class PipelineError(RuntimeError):
     """Raised when the end-to-end pipeline cannot produce a valid result."""
 
 
+class WeightsNotConfiguredError(PipelineError):
+    """Raised when no usable YOLO weights checkpoint is configured."""
+
+
+def describe_weights_problem(weights_path: str | None) -> str | None:
+    """Return None if `weights_path` is a usable checkpoint file, else why not.
+
+    Only checks configuration and filesystem state; never loads the checkpoint,
+    so this is cheap enough to call on every readiness probe.
+    """
+    if not weights_path:
+        return "YOLO_WEIGHTS is not set. Configure it to point at a trusted YOLO checkpoint file."
+    path = Path(weights_path)
+    try:
+        if not path.is_file():
+            return "The configured YOLO_WEIGHTS file was not found."
+        if not os.access(path, os.R_OK):
+            return "The configured YOLO_WEIGHTS file is not readable."
+        if path.stat().st_size == 0:
+            return "The configured YOLO_WEIGHTS file is empty."
+    except OSError:
+        return "The configured YOLO_WEIGHTS file could not be checked."
+    return None
+
+
 def _deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
@@ -122,8 +147,12 @@ class PipelineOrchestrator:
         configured_limit = int(self.config.get("processing", {}).get("max_frames", 300))
         requested_frames = round((request.max_duration or 300) * request.frame_rate)
         max_frames = max(1, min(configured_limit, requested_frames))
+        weights = os.getenv("YOLO_WEIGHTS") or ""
+        problem = describe_weights_problem(weights)
+        if problem is not None:
+            raise WeightsNotConfiguredError(problem)
         return PipelineConfig(
-            weights=os.getenv("YOLO_WEIGHTS", "yolov8n.pt"),
+            weights=weights,
             confidence=request.confidence_threshold,
             min_confidence=request.confidence_threshold,
             gnn_weights=os.getenv("GNN_WEIGHTS", ""),
@@ -143,13 +172,14 @@ class PipelineOrchestrator:
             self.config.get("youtube", {}).get("video", {}).get("max_duration_seconds", 1800)
         )
         max_duration = min(request.max_duration or configured_duration, configured_duration)
+        pipeline_config = self._pipeline_config(request)
 
         try:
             raw_result = await asyncio.to_thread(
                 self.processor,
                 str(request.url),
                 output_dir,
-                self._pipeline_config(request),
+                pipeline_config,
                 request.sample_duration,
                 request.force_full_analysis,
                 include_audio=request.include_audio,

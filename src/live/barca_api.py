@@ -21,13 +21,18 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.detect.infer import InferenceConfig, extract_detections, first_prediction, load_model
 from src.live.rtsp_capture import RTSPCapture
+from src.pipeline_orchestrator import WeightsNotConfiguredError, describe_weights_problem
 from src.utils.network_security import redact_url_credentials, validate_rtsp_target
 
 LOGGER = logging.getLogger(__name__)
 
 
 def _default_detector_factory() -> Any:
-    return load_model(InferenceConfig(weights=os.getenv("YOLO_WEIGHTS", "yolov8n.pt")))
+    weights = os.getenv("YOLO_WEIGHTS") or ""
+    problem = describe_weights_problem(weights)
+    if problem is not None:
+        raise WeightsNotConfiguredError(problem)
+    return load_model(InferenceConfig(weights=weights))
 
 
 class StreamRequest(BaseModel):

@@ -176,3 +176,16 @@ def test_frame_ids_are_monotonic_across_batches(api_server: BarcaAPIServer) -> N
     second = api_server._run_detector(detector, [frame])
 
     assert [item["frame_id"] for item in first + second] == [0, 1, 2]
+
+
+def test_default_detector_factory_requires_configured_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: unset YOLO_WEIGHTS must not silently fall back to a bundled default."""
+    from src.live.barca_api import _default_detector_factory
+    from src.pipeline_orchestrator import WeightsNotConfiguredError
+
+    monkeypatch.delenv("YOLO_WEIGHTS", raising=False)
+
+    with pytest.raises(WeightsNotConfiguredError, match="YOLO_WEIGHTS"):
+        _default_detector_factory()

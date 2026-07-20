@@ -36,12 +36,15 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture(autouse=True)
-def isolated_api_state(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+def isolated_api_state(monkeypatch: pytest.MonkeyPatch, tmp_path):  # type: ignore[no-untyped-def]
     api.task_storage.clear()
     api.running_tasks.clear()
     fake = FakeOrchestrator()
     monkeypatch.setattr(api, "orchestrator", fake)
     monkeypatch.setattr(api, "API_KEY", None)
+    weights = tmp_path / "yolov8n.pt"
+    weights.write_bytes(b"dummy-checkpoint-bytes")
+    monkeypatch.setenv("YOLO_WEIGHTS", str(weights))
     yield fake
     for task in tuple(api.running_tasks.values()):
         task.cancel()

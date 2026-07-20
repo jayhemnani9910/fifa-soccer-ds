@@ -25,7 +25,11 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from src import __version__
-from src.pipeline_orchestrator import PipelineOrchestrator, create_pipeline_orchestrator
+from src.pipeline_orchestrator import (
+    PipelineOrchestrator,
+    create_pipeline_orchestrator,
+    describe_weights_problem,
+)
 from src.schemas import TaskStatus, YouTubeAnalysisRequest, validate_youtube_url
 from src.utils.monitoring import get_gpu_memory_usage, get_system_metrics
 from src.utils.output_paths import validate_output_name
@@ -167,7 +171,7 @@ app.add_middleware(
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     """Require an API key for non-public routes when one is configured."""
-    public_paths = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
+    public_paths = {"/", "/health", "/ready", "/docs", "/redoc", "/openapi.json"}
     if API_KEY and request.url.path not in public_paths:
         supplied_key = request.headers.get("X-API-Key", "")
         if not secrets.compare_digest(supplied_key, API_KEY):
@@ -218,6 +222,13 @@ class HealthResponse(BaseModel):
     system_metrics: dict[str, Any]
     gpu_memory: int | None = None
     active_tasks: int
+
+
+class ReadinessResponse(BaseModel):
+    """Response model for the readiness check."""
+
+    status: Literal["ready"]
+    checks: dict[str, str]
 
 
 class TaskResponse(BaseModel):
@@ -272,6 +283,23 @@ async def health_endpoint() -> HealthResponse:
         raise HTTPException(status_code=503, detail="Service unhealthy") from exc
 
 
+@app.get("/ready", response_model=ReadinessResponse)
+async def readiness_endpoint() -> ReadinessResponse:
+    """Readiness check: can this service actually serve an /analyze request right now?
+
+    Checks configuration and filesystem state only; never loads a model checkpoint,
+    since this is probed on a short interval.
+    """
+    if orchestrator is None:
+        raise HTTPException(status_code=503, detail="Pipeline not initialized")
+
+    weights_problem = describe_weights_problem(os.getenv("YOLO_WEIGHTS"))
+    if weights_problem is not None:
+        raise HTTPException(status_code=503, detail=weights_problem)
+
+    return ReadinessResponse(status="ready", checks={"weights": "configured"})
+
+
 @app.post("/analyze", response_model=AnalyzeResponse)
 @limiter.limit("10/minute")  # Limit analysis requests to prevent abuse
 async def analyze_video(request: Request, req: AnalyzeRequest):
@@ -283,6 +311,10 @@ async def analyze_video(request: Request, req: AnalyzeRequest):
     )
     if active_tasks >= MAX_ACTIVE_TASKS:
         raise HTTPException(status_code=429, detail="Maximum concurrent analyses reached")
+
+    weights_problem = describe_weights_problem(os.getenv("YOLO_WEIGHTS"))
+    if weights_problem is not None:
+        raise HTTPException(status_code=503, detail=weights_problem)
 
     try:
         _prune_task_history()
