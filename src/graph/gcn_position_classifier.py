@@ -8,28 +8,15 @@ from typing import Any
 
 import torch
 from torch import nn
-
-try:
-    from torch_geometric.data import Data
-    from torch_geometric.loader import DataLoader
-    from torch_geometric.nn import SAGEConv
-
-    _TG_AVAILABLE = True
-except ImportError:  # pragma: no cover - optional dependency
-    Data = None  # type: ignore[assignment,misc]
-    DataLoader = None  # type: ignore[assignment,misc]
-    SAGEConv = None  # type: ignore[assignment,misc]
-    _TG_AVAILABLE = False
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
+from torch_geometric.nn import SAGEConv
 
 from src.eval.metrics import f1_score
 
 
 def _require_torch_geometric() -> None:
-    if not _TG_AVAILABLE:
-        raise ImportError(
-            "torch-geometric is required for PositionClassifier; install with "
-            "`pip install torch-geometric`"
-        )
+    """Retained for compatibility; torch-geometric is a required dependency."""
 
 
 class PositionClassifier(nn.Module):
@@ -65,7 +52,7 @@ class PositionClassifier(nn.Module):
     def forward(
         self, data: Data | torch.Tensor, edge_index: torch.Tensor | None = None
     ) -> torch.Tensor:
-        if Data is not None and isinstance(data, Data):
+        if isinstance(data, Data):
             x = data.x
             edge_index = data.edge_index if edge_index is None else edge_index
         else:
@@ -192,7 +179,7 @@ def predict_positions(
         raise FileNotFoundError(f"GNN weights not found: {path}")
 
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = torch.load(path, map_location=device, weights_only=False)
+    ckpt = torch.load(path, map_location=device, weights_only=True)
     meta = ckpt.get("meta", {})
     model = PositionClassifier(
         in_channels=meta.get("in_channels", graph_data.x.shape[1]),

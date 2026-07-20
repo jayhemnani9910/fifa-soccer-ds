@@ -1,477 +1,314 @@
-"""
-Pipeline Orchestrator for FIFA Soccer DS YouTube Integration
-
-This module provides the missing orchestration layer that chains together
-detection → tracking → graph construction with proper error handling,
-retry logic, and validation.
-"""
+"""Async orchestration for the verified YouTube processing pipeline."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
-import tempfile
+import math
+import os
 import time
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
+import uuid
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from .classify.soccer_classifier import SoccerClassifier
+import yaml
 
-# Import pipeline components
-from .schemas import (
+from src.pipeline_full import PipelineConfig
+from src.pipeline_full import process_youtube_video as run_youtube_pipeline
+from src.schemas import (
     PipelineOutput,
     PlayerAnalysis,
     SoccerClassification,
     VideoMetadata,
     YouTubeAnalysisRequest,
-    validate_youtube_url,
+    extract_youtube_video_id,
 )
-from .utils.health_checks import health_check
-from .youtube import AudioExtractor, YouTubeDownloader, YouTubeMetadataParser
+from src.utils.health_checks import health_check
+from src.utils.output_paths import create_analysis_output_dir
 
-# Configure logging
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
+PipelineProcessor = Callable[..., dict[str, Any]]
 
-class ProcessingStage(Enum):
-    """Pipeline processing stages."""
-
-    DOWNLOAD = "download"
-    FRAME_EXTRACTION = "frame_extraction"
-    AUDIO_EXTRACTION = "audio_extraction"
-    DETECTION = "detection"
-    TRACKING = "tracking"
-    CLASSIFICATION = "classification"
-    REPORT_GENERATION = "report_generation"
-    CLEANUP = "cleanup"
+_DEFAULT_CONFIG: dict[str, Any] = {
+    "pipeline": {"name": "YouTube Soccer Analyzer", "version": "0.1.0"},
+    "youtube": {"video": {"max_duration_seconds": 1800}},
+    "output": {"base_dir": "outputs"},
+    "processing": {"max_frames": 300},
+    "analytics": {"enable_tactical": False},
+}
 
 
-@dataclass
-class StageResult:
-    """Result from a processing stage."""
-
-    stage: ProcessingStage
-    success: bool
-    data: Any = None
-    error: str | None = None
-    duration: float = 0.0
-    retry_count: int = 0
+class PipelineError(RuntimeError):
+    """Raised when the end-to-end pipeline cannot produce a valid result."""
 
 
-@dataclass
-class PipelineContext:
-    """Context shared across pipeline stages."""
+def _deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
-    request: YouTubeAnalysisRequest
-    output_dir: Path
-    temp_dir: Path
-    video_path: Path | None = None
-    frames_dir: Path | None = None
-    audio_path: Path | None = None
-    metadata: VideoMetadata | None = None
-    stage_results: list[StageResult] = field(default_factory=list)
-    transcription: dict[str, Any] | None = None
-    classification_results: dict[str, Any] | None = None
+
+def _parse_publish_date(raw: Any) -> datetime | None:
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo is not None else raw.replace(tzinfo=UTC)
+    if isinstance(raw, str):
+        for parser in (datetime.fromisoformat, lambda value: datetime.strptime(value, "%Y%m%d")):
+            try:
+                parsed = parser(raw)
+                return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+            except ValueError:
+                continue
+    return None
+
+
+def _content_type(
+    classification: Mapping[str, Any],
+) -> Literal["match", "highlight", "training", "interview", "analysis", "other"]:
+    raw = (
+        classification.get("analysis_breakdown", {})
+        .get("metadata_analysis", {})
+        .get("content_type", "other")
+    )
+    aliases: dict[
+        str, Literal["match", "highlight", "training", "interview", "analysis", "other"]
+    ] = {
+        "highlights": "highlight",
+        "game": "match",
+        "match": "match",
+        "highlight": "highlight",
+        "training": "training",
+        "interview": "interview",
+        "analysis": "analysis",
+        "other": "other",
+    }
+    normalized = aliases.get(str(raw).lower(), str(raw).lower())
+    return aliases.get(normalized, "other")
 
 
 class PipelineOrchestrator:
-    """
-    Main orchestrator that coordinates the entire YouTube analysis pipeline.
+    """Run the synchronous CV pipeline without blocking the API event loop."""
 
-    This addresses the validation report's concern about missing integration
-    orchestration by providing proper error handling, retry logic, and
-    stage chaining.
-    """
-
-    def __init__(self, config_path: str = "configs/youtube_pipeline.yaml"):
-        """Initialize the pipeline orchestrator."""
+    def __init__(
+        self,
+        config_path: str | Path = "configs/youtube_pipeline.yaml",
+        *,
+        processor: PipelineProcessor = run_youtube_pipeline,
+    ) -> None:
         self.config_path = Path(config_path)
         self.config = self._load_config()
-
-        # Initialize components
-        self.downloader = YouTubeDownloader()
-        self.audio_extractor = AudioExtractor()
-        self.metadata_parser = YouTubeMetadataParser()
-        self.soccer_classifier = SoccerClassifier()
-
-        # Error handling settings
-        self.max_retries = self.config.get("error_handling", {}).get("max_retries", 3)
-        self.retry_delay = self.config.get("error_handling", {}).get("retry_delay_seconds", 5)
-
-        logger.info("Pipeline orchestrator initialized")
+        self.processor = processor
 
     def _load_config(self) -> dict[str, Any]:
-        """Load pipeline configuration."""
-        try:
-            # For now, use default config without YAML dependency
-            return self._get_default_config()
-        except Exception as e:
-            logger.error(f"Failed to load config: {e}")
-            return self._get_default_config()
+        if not self.config_path.exists():
+            LOGGER.warning("Pipeline config not found; using safe defaults: %s", self.config_path)
+            return _deep_merge({}, _DEFAULT_CONFIG)
 
-    def _get_default_config(self) -> dict[str, Any]:
-        """Get default configuration."""
-        return {
-            "error_handling": {
-                "max_retries": 3,
-                "retry_delay_seconds": 5,
-                "fallback_on_error": True,
-            },
-            "youtube": {"video": {"max_duration_seconds": 1800}},
-        }
+        try:
+            raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise ValueError(f"Could not load pipeline config {self.config_path}: {exc}") from exc
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"Pipeline config must be a mapping: {self.config_path}")
+        return _deep_merge(_DEFAULT_CONFIG, raw)
+
+    def _pipeline_config(self, request: YouTubeAnalysisRequest) -> PipelineConfig:
+        configured_limit = int(self.config.get("processing", {}).get("max_frames", 300))
+        requested_frames = round((request.max_duration or 300) * request.frame_rate)
+        max_frames = max(1, min(configured_limit, requested_frames))
+        return PipelineConfig(
+            weights=os.getenv("YOLO_WEIGHTS", "yolov8n.pt"),
+            confidence=request.confidence_threshold,
+            min_confidence=request.confidence_threshold,
+            gnn_weights=os.getenv("GNN_WEIGHTS", ""),
+            max_frames=max_frames,
+            enable_tactical_analytics=bool(
+                self.config.get("analytics", {}).get("enable_tactical", False)
+            ),
+            calibration_path=str(self.config.get("analytics", {}).get("calibration_path", "")),
+        )
 
     @health_check
     async def process_youtube_video(self, request: YouTubeAnalysisRequest) -> PipelineOutput:
-        """
-        Main pipeline method that orchestrates the entire YouTube video analysis.
-
-        This is the missing piece identified in the validation report - the actual
-        orchestration logic that chains all components together.
-
-        Args:
-            request: YouTube analysis request
-
-        Returns:
-            PipelineOutput: Complete analysis results
-
-        Raises:
-            PipelineError: If pipeline fails after all retries
-        """
-        logger.info(f"Starting YouTube video analysis: {request.url}")
-        start_time = time.time()
-
-        # Create pipeline context
-        context = await self._create_pipeline_context(request)
+        """Run classification, download, detection, tracking, and graph generation."""
+        started = time.monotonic()
+        output_dir = create_analysis_output_dir(request.output_dir, uuid.uuid4().hex)
+        configured_duration = int(
+            self.config.get("youtube", {}).get("video", {}).get("max_duration_seconds", 1800)
+        )
+        max_duration = min(request.max_duration or configured_duration, configured_duration)
 
         try:
-            # Execute pipeline stages with retry logic
-            await self._execute_pipeline_stages(context)
-
-            # Generate final output
-            output = await self._generate_pipeline_output(context, start_time)
-
-            logger.info(f"Pipeline completed successfully in {time.time() - start_time:.2f}s")
-            return output
-
-        except Exception as e:
-            logger.error(f"Pipeline failed: {e}")
-            raise PipelineError(f"Pipeline execution failed: {e}")
-
-        finally:
-            # Cleanup temporary files
-            await self._cleanup_pipeline_context(context)
-
-    async def _create_pipeline_context(self, request: YouTubeAnalysisRequest) -> PipelineContext:
-        """Create and initialize pipeline context."""
-        # Validate YouTube URL
-        if not validate_youtube_url(str(request.url)):
-            raise ValueError(f"Invalid YouTube URL: {request.url}")
-
-        # Create output directory
-        output_dir = Path(request.output_dir or f"./outputs/youtube_analysis_{int(time.time())}")
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create temporary directory
-        temp_dir = Path(tempfile.mkdtemp(prefix="youtube_analysis_"))
-
-        context = PipelineContext(request=request, output_dir=output_dir, temp_dir=temp_dir)
-
-        logger.info(f"Pipeline context created: output={output_dir}, temp={temp_dir}")
-        return context
-
-    async def _execute_pipeline_stages(self, context: PipelineContext):
-        """Execute all pipeline stages with proper error handling."""
-
-        # Stage 1: Download video
-        await self._execute_stage(context, ProcessingStage.DOWNLOAD, self._download_video_stage)
-
-        # Stage 2: Extract metadata
-        await self._execute_stage(
-            context, ProcessingStage.FRAME_EXTRACTION, self._extract_frames_stage
-        )
-
-        # Stage 3: Extract audio (if requested)
-        if context.request.include_audio:
-            await self._execute_stage(
-                context, ProcessingStage.AUDIO_EXTRACTION, self._extract_audio_stage
+            raw_result = await asyncio.to_thread(
+                self.processor,
+                str(request.url),
+                output_dir,
+                self._pipeline_config(request),
+                request.sample_duration,
+                request.force_full_analysis,
+                include_audio=request.include_audio,
+                max_duration=max_duration,
             )
-
-        # Stage 4: Run soccer classification
-        await self._execute_stage(
-            context, ProcessingStage.CLASSIFICATION, self._classify_soccer_content_stage
-        )
-
-        # Stage 5: Generate report
-        await self._execute_stage(
-            context, ProcessingStage.REPORT_GENERATION, self._generate_report_stage
-        )
-
-    async def _execute_stage(
-        self, context: PipelineContext, stage: ProcessingStage, stage_func: Callable
-    ):
-        """Execute a pipeline stage with retry logic."""
-        logger.info(f"Executing stage: {stage.value}")
-
-        for attempt in range(self.max_retries + 1):
-            start_time = time.time()
-            try:
-                # Execute the stage function
-                if asyncio.iscoroutinefunction(stage_func):
-                    await stage_func(context)
-                else:
-                    stage_func(context)
-
-                duration = time.time() - start_time
-
-                # Record successful result
-                result = StageResult(
-                    stage=stage, success=True, duration=duration, retry_count=attempt
-                )
-                context.stage_results.append(result)
-
-                logger.info(
-                    f"Stage {stage.value} completed successfully (attempt {attempt + 1}, {duration:.2f}s)"
-                )
-                return
-
-            except Exception as e:
-                duration = time.time() - start_time
-                error_msg = f"Stage {stage.value} failed (attempt {attempt + 1}): {e}"
-                logger.error(error_msg)
-
-                # Record failed result
-                result = StageResult(
-                    stage=stage, success=False, error=str(e), duration=duration, retry_count=attempt
-                )
-                context.stage_results.append(result)
-
-                # If this was the last attempt, raise the error
-                if attempt == self.max_retries:
-                    raise PipelineStageError(stage, str(e))
-
-                # Wait before retry
-                await asyncio.sleep(self.retry_delay)
-
-        # Should not reach here
-        raise PipelineStageError(stage, f"Max retries ({self.max_retries}) exceeded")
-
-    async def _download_video_stage(self, context: PipelineContext):
-        """Download YouTube video."""
-        try:
-            download_result = self.downloader.download_video(str(context.request.url))
-            context.video_path = Path(download_result["video_path"])
-            logger.info(f"Video downloaded: {context.video_path}")
-
-        except Exception as e:
-            logger.error(f"Video download failed: {e}")
-            raise
-
-    async def _extract_frames_stage(self, context: PipelineContext):
-        """Extract frames from downloaded video."""
-        if not context.video_path:
-            raise ValueError("No video path available for frame extraction")
-
-        try:
-            frames_dir = context.temp_dir / "frames"
-            frames_dir.mkdir(exist_ok=True)
-
-            # Extract frames at specified rate
-            # Here you would implement actual frame extraction logic
-            # For now, create a placeholder
-            context.frames_dir = frames_dir
-
-            logger.info(f"Frames extracted to: {frames_dir}")
-
-        except Exception as e:
-            logger.error(f"Frame extraction failed: {e}")
-            raise
-
-    async def _extract_audio_stage(self, context: PipelineContext):
-        """Extract and transcribe audio."""
-        if not context.video_path:
-            raise ValueError("No video path available for audio extraction")
-
-        try:
-            audio_path = self.audio_extractor.extract_audio(context.video_path, context.temp_dir)
-            context.audio_path = Path(audio_path)
-
-            # Transcribe audio if requested
-            if context.request.include_audio:
-                transcription = self.audio_extractor.transcribe_audio(context.audio_path)
-                # Store transcription results in context
-                context.transcription = transcription
-
-            logger.info(f"Audio extracted and transcribed: {context.audio_path}")
-
-        except Exception as e:
-            logger.error(f"Audio extraction failed: {e}")
-            raise
-
-    async def _classify_soccer_content_stage(self, context: PipelineContext):
-        """Run soccer classification on extracted content."""
-        try:
-            # Run multi-modal soccer analysis
-            classification_results = self.soccer_classifier.classify_youtube_content(
-                youtube_url=str(context.request.url),
-                sample_duration=context.request.sample_duration,
+            return self._to_pipeline_output(
+                request=request,
+                raw_result=raw_result,
+                output_dir=output_dir,
+                elapsed=max(time.monotonic() - started, 1e-9),
             )
-
-            context.classification_results = classification_results
-            logger.info("Soccer classification completed")
-
-        except Exception as e:
-            logger.error(f"Soccer classification failed: {e}")
+        except asyncio.CancelledError:
+            LOGGER.info("Pipeline task cancelled for %s", request.url)
             raise
+        except Exception as exc:
+            LOGGER.exception("YouTube pipeline failed")
+            raise PipelineError(f"Pipeline execution failed: {exc}") from exc
 
-    async def _generate_report_stage(self, context: PipelineContext):
-        """Generate final analysis report."""
-        try:
-            # Here you would implement report generation logic
-            # For now, create placeholder output files
-
-            report_path = context.output_dir / "analysis_report.json"
-            with open(report_path, "w") as f:
-                import json
-
-                json.dump(
-                    {
-                        "pipeline_completed": True,
-                        "stages_executed": len(context.stage_results),
-                        "successful_stages": sum(1 for r in context.stage_results if r.success),
-                        "total_duration": sum(r.duration for r in context.stage_results),
-                    },
-                    f,
-                    indent=2,
-                )
-
-            logger.info(f"Report generated: {report_path}")
-
-        except Exception as e:
-            logger.error(f"Report generation failed: {e}")
-            raise
-
-    async def _generate_pipeline_output(
-        self, context: PipelineContext, start_time: float
+    def _to_pipeline_output(
+        self,
+        *,
+        request: YouTubeAnalysisRequest,
+        raw_result: Mapping[str, Any],
+        output_dir: Path,
+        elapsed: float,
     ) -> PipelineOutput:
-        """Generate the final PipelineOutput object."""
+        classification = raw_result.get("classification")
+        if not isinstance(classification, Mapping):
+            raise PipelineError("Pipeline result omitted classification evidence")
 
-        # Calculate processing duration
-        processing_duration = time.time() - start_time
-
-        # Get metadata (would be populated during metadata extraction stage)
-        metadata = context.metadata or VideoMetadata(
-            video_id="unknown",
-            title="YouTube Video",
-            description="",
-            duration_seconds=1,
-            channel_title="Unknown",
-            channel_id="unknown",
-            view_count=0,
-            publish_date=datetime.now(),
+        video_info = classification.get("processing_info", {}).get("video_info", {})
+        if not isinstance(video_info, Mapping):
+            video_info = {}
+        metadata = VideoMetadata(
+            video_id=str(video_info.get("id") or extract_youtube_video_id(str(request.url))),
+            title=str(video_info.get("title") or "")[:200],
+            description=str(video_info.get("description") or ""),
+            duration_seconds=(
+                int(video_info["duration"]) if video_info.get("duration") is not None else None
+            ),
+            channel_title=(
+                str(video_info["uploader"])[:100] if video_info.get("uploader") else None
+            ),
+            channel_id=(str(video_info["channel_id"]) if video_info.get("channel_id") else None),
+            view_count=(
+                int(video_info["view_count"]) if video_info.get("view_count") is not None else None
+            ),
+            like_count=video_info.get("like_count"),
+            comment_count=video_info.get("comment_count"),
+            tags=list(video_info.get("tags") or []),
+            categories=list(video_info.get("categories") or []),
+            publish_date=_parse_publish_date(video_info.get("upload_date")),
+            resolution=(str(video_info["resolution"]) if video_info.get("resolution") else None),
+            fps=(float(video_info["fps"]) if video_info.get("fps") is not None else None),
+            audio_codec=(str(video_info["acodec"]) if video_info.get("acodec") else None),
+            video_codec=(str(video_info["vcodec"]) if video_info.get("vcodec") else None),
         )
 
-        # Create classification results
-        classification = SoccerClassification(
-            is_soccer=True,  # Would be determined by actual classification
-            soccer_confidence=0.8,
-            content_type="match",
-            events_detected=[],
-            total_events=0,
-            detection_quality=0.75,
-            processing_success_rate=0.9,
-        )
+        summary = raw_result.get("pipeline_summary", {})
+        if not isinstance(summary, Mapping):
+            summary = {}
+        track_ids = [int(item) for item in summary.get("unique_track_ids", [])]
+        is_soccer = bool(classification.get("is_soccer"))
 
-        # Create player analysis
-        player_analysis = PlayerAnalysis(
-            total_players_detected=22,
-            player_tracks=[],
-            teams_detected=2,
-            team_colors=["blue", "red"],
-            avg_track_length=30.0,
-            player_positions={},
-        )
+        warnings = [
+            "Event detection and per-player match statistics are not implemented.",
+            "Tracker IDs are not verified player identities and may switch or fragment.",
+        ]
+        if not is_soccer:
+            warnings = [
+                "Full CV analysis was skipped because the classifier marked the video non-soccer."
+            ]
+        failures = summary.get("failures", {})
+        if isinstance(failures, Mapping) and any(
+            isinstance(value, int | float) and value > 0 for value in failures.values()
+        ):
+            warnings.append(f"Pipeline completed with partial frame failures: {dict(failures)}")
 
-        # Create output
-        output = PipelineOutput(
-            pipeline_version="1.0.0",
-            processing_timestamp=datetime.now(),
-            processing_duration_seconds=processing_duration,
+        success_rate = summary.get("processing_success_rate")
+        if success_rate is None:
+            measured_success_rate = None
+        elif (
+            isinstance(success_rate, bool)
+            or not isinstance(success_rate, int | float)
+            or not math.isfinite(float(success_rate))
+            or not 0.0 <= float(success_rate) <= 1.0
+        ):
+            raise ValueError("processing_success_rate must be finite and between 0 and 1")
+        else:
+            measured_success_rate = float(success_rate)
+
+        output_files: dict[str, str] = {}
+        candidates = {
+            "analysis": output_dir / "youtube_analysis.json",
+            "pipeline_summary": output_dir / "soccer_analysis" / "pipeline_summary.json",
+            "graph": output_dir / "soccer_analysis" / "graphs" / "final_graph.json",
+            "report": output_dir / "analysis_report.md",
+        }
+        for name, path in candidates.items():
+            if path.exists():
+                output_files[name] = str(path)
+
+        return PipelineOutput(
+            pipeline_version=str(self.config.get("pipeline", {}).get("version", "0.1.0")),
+            processing_timestamp=datetime.now(UTC),
+            processing_duration_seconds=elapsed,
             input_source="youtube",
-            input_url=context.request.url,
+            input_url=request.url,
             input_metadata=metadata,
-            soccer_classification=classification,
-            player_analysis=player_analysis,
-            output_files={"report": str(context.output_dir / "analysis_report.json")},
+            soccer_classification=SoccerClassification(
+                is_soccer=is_soccer,
+                soccer_confidence=float(classification.get("confidence") or 0.0),
+                content_type=_content_type(classification),
+                events_detected=[],
+                total_events=None,
+                detection_quality=None,
+                processing_success_rate=measured_success_rate,
+            ),
+            player_analysis=PlayerAnalysis(
+                total_players_detected=len(track_ids),
+                player_tracks=[],
+                teams_detected=0,
+                team_colors=[],
+                avg_track_length=None,
+                player_positions={},
+            ),
+            tactical_analytics=(
+                dict(raw_result["tactical_analytics"])
+                if isinstance(raw_result.get("tactical_analytics"), Mapping)
+                else None
+            ),
+            output_files=output_files,
+            summary_report=output_files.get("report"),
             errors=[],
-            warnings=[],
+            warnings=warnings,
         )
 
-        return output
 
-    async def _cleanup_pipeline_context(self, context: PipelineContext):
-        """Clean up temporary files and resources."""
-        try:
-            if context.temp_dir.exists():
-                shutil.rmtree(context.temp_dir)
-                logger.info(f"Cleaned up temporary directory: {context.temp_dir}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup temporary directory: {e}")
-
-
-class PipelineError(Exception):
-    """Base exception for pipeline errors."""
-
-    pass
-
-
-class PipelineStageError(PipelineError):
-    """Exception for stage-specific errors."""
-
-    def __init__(self, stage: ProcessingStage, error: str):
-        self.stage = stage
-        self.error = error
-        super().__init__(f"Pipeline stage {stage.value} failed: {error}")
-
-
-# Utility functions for pipeline management
 async def create_pipeline_orchestrator(
-    config_path: str = "configs/youtube_pipeline.yaml",
+    config_path: str | Path = "configs/youtube_pipeline.yaml",
 ) -> PipelineOrchestrator:
-    """Create and initialize a pipeline orchestrator."""
+    """Create the API orchestrator."""
     return PipelineOrchestrator(config_path)
 
 
-async def process_youtube_url(url: str, output_dir: str | None = None, **kwargs) -> PipelineOutput:
-    """Convenience function to process a YouTube URL."""
-
-    # Create request object
-    request = YouTubeAnalysisRequest(url=url, output_dir=output_dir, **kwargs)
-
-    # Create orchestrator and process
+async def process_youtube_url(
+    url: str, output_dir: str | None = None, **kwargs: Any
+) -> PipelineOutput:
+    """Validate and process one YouTube URL."""
+    request = YouTubeAnalysisRequest.model_validate(
+        {"url": url, "output_dir": output_dir, **kwargs}
+    )
     orchestrator = await create_pipeline_orchestrator()
     return await orchestrator.process_youtube_video(request)
 
 
-if __name__ == "__main__":
-    # Test the orchestrator
-    async def main():
-        # Create test request
-        request = YouTubeAnalysisRequest(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-
-        # Create orchestrator
-        orchestrator = PipelineOrchestrator()
-
-        # Process video
-        try:
-            result = await orchestrator.process_youtube_video(request)
-            print("Pipeline completed successfully!")
-            print(f"Output: {result}")
-        except Exception as e:
-            print(f"Pipeline failed: {e}")
-
-    asyncio.run(main())
+__all__ = [
+    "PipelineError",
+    "PipelineOrchestrator",
+    "create_pipeline_orchestrator",
+    "process_youtube_url",
+]

@@ -13,18 +13,20 @@ import argparse
 import hashlib
 import json
 import logging
-import subprocess
-from datetime import datetime
+import math
+import os
+import shutil
+
+# Subprocesses use fixed argument vectors and shutil-resolved executables.
+import subprocess  # nosec B404
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import torch
 from torch.optim import AdamW
 from torch.utils.data import random_split
-
-try:
-    from torch_geometric.data import InMemoryDataset
-except ImportError:  # pragma: no cover - optional dependency
-    InMemoryDataset = None  # type: ignore[assignment]
+from torch_geometric.data import InMemoryDataset
 
 from src.eval.metrics import accuracy, f1_score
 from src.models.gcn import GraphSAGENet, create_dataloader, forward_pass
@@ -33,12 +35,35 @@ from src.utils.mlflow_helper import log_run_artifacts, log_run_metrics, log_run_
 LOGGER = logging.getLogger(__name__)
 
 
+def load_graph_dataset(path: Path, *, trust_pickle: bool = False):
+    """Load a legacy pickled PyG dataset only after explicit trust confirmation.
+
+    ``torch_geometric`` datasets saved as whole Python objects require pickle and
+    may execute code during deserialization. Callers must establish provenance
+    (for example, a reviewed DVC artifact) before opting in.
+    """
+    if not trust_pickle:
+        raise ValueError(
+            "Refusing to deserialize a pickled graph dataset without explicit trust confirmation"
+        )
+    LOGGER.warning("Loading trusted pickled graph dataset: %s", path)
+    # The explicit trust_pickle gate above is required because legacy PyG objects use pickle.
+    return torch.load(  # nosec B614
+        path, map_location="cpu", weights_only=False
+    )
+
+
 def get_git_hash() -> str:
     """Get current git commit hash."""
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        return "unknown"
     try:
         return (
-            subprocess.check_output(
-                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+            # The executable is resolved and every argument is constant.
+            subprocess.check_output(  # nosec B603
+                [git_executable, "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
             )
             .decode()
             .strip()
@@ -48,24 +73,16 @@ def get_git_hash() -> str:
 
 
 def get_dataset_version(dataset_path: Path) -> str:
-    """Get dataset version hash from DVC or file stats."""
-    try:
-        # Try DVC first
-        if dataset_path.exists():
-            file_hash = hashlib.md5(dataset_path.read_bytes()).hexdigest()[:8]
-            return f"dvc_{file_hash}"
-    except Exception:
-        pass
+    """Return a content-derived dataset provenance identifier."""
+    path = Path(dataset_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Dataset file not found: {path}")
 
-    # Fallback to file modification time
-    try:
-        if dataset_path.exists():
-            mtime = dataset_path.stat().st_mtime
-            return f"mtime_{int(mtime)}"
-    except Exception:
-        pass
-
-    return "unknown"
+    digest = hashlib.sha256()
+    with path.open("rb") as dataset_file:
+        for chunk in iter(lambda: dataset_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256_{digest.hexdigest()[:16]}"
 
 
 def generate_experiment_name(
@@ -84,7 +101,7 @@ def generate_experiment_name(
         Unique experiment name string
     """
     git_hash = get_git_hash()
-    date_str = datetime.utcnow().strftime("%Y%m%d")
+    date_str = datetime.now(UTC).strftime("%Y%m%d")
 
     # Build base name
     parts = ["fifa_gnn", model_type, date_str, git_hash]
@@ -229,7 +246,12 @@ def save_checkpoint(model: GraphSAGENet, optimizer, epoch: int, metrics: dict, p
         "optimizer_state_dict": optimizer.state_dict(),
         "metrics": metrics,
     }
-    torch.save(checkpoint, path)
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        torch.save(checkpoint, temporary_path)
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
     LOGGER.info(
         "Checkpoint saved: %s (epoch %d, val_acc=%.4f)", path, epoch, metrics.get("val_acc", 0)
     )
@@ -246,14 +268,14 @@ def load_checkpoint(model: GraphSAGENet, optimizer, path: Path) -> dict:
     Returns:
         Dictionary containing checkpoint metadata
     """
-    checkpoint = torch.load(path)
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     LOGGER.info("Checkpoint loaded: %s (epoch %d)", path, checkpoint["epoch"])
     return checkpoint
 
 
-def run_training(
+def _run_training_impl(
     dataset,
     model: GraphSAGENet | None = None,
     epochs: int = 5,
@@ -263,11 +285,10 @@ def run_training(
     device: str | None = None,
     early_stopping_patience: int = 3,
     checkpoint_dir: str | Path | None = None,
-    dataset_path: Path | None = None,
-    experiment_name: str | None = None,
-    enable_mlflow: bool = True,
+    tracking_enabled: bool = False,
+    seed: int = 42,
 ) -> tuple[GraphSAGENet, dict]:
-    """Run full training loop with checkpointing, early stopping, and MLflow tracking.
+    """Execute a validated training run inside an optional active MLflow run.
 
     Args:
         dataset: torch_geometric InMemoryDataset
@@ -279,22 +300,22 @@ def run_training(
         device: Device string (cpu/cuda)
         early_stopping_patience: Patience for early stopping
         checkpoint_dir: Directory to save checkpoints (None = don't save)
-        dataset_path: Path to dataset for versioning
-        experiment_name: Custom MLflow experiment name (auto-generated if None)
-        enable_mlflow: Whether to enable MLflow tracking
+        tracking_enabled: Whether an active MLflow run is available
+        seed: Reproducibility seed used for model initialization and dataset splitting
 
     Returns:
         Tuple of (trained_model, metrics_dict)
     """
-    if InMemoryDataset is None:
-        raise ImportError("torch-geometric must be installed to train the GCN model.")
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-    if isinstance(dataset, InMemoryDataset):
-        train_length = int(len(dataset) * 0.8)
-        val_length = len(dataset) - train_length
-        train_subset, val_subset = random_split(dataset, [train_length, val_length])
-    else:
-        raise TypeError("Dataset must be a torch_geometric InMemoryDataset for the training stub.")
+    train_length = max(1, min(len(dataset) - 1, int(len(dataset) * 0.8)))
+    val_length = len(dataset) - train_length
+    split_generator = torch.Generator().manual_seed(seed)
+    train_subset, val_subset = random_split(
+        dataset, [train_length, val_length], generator=split_generator
+    )
 
     model = model or GraphSAGENet(
         in_channels=dataset.num_node_features, num_classes=dataset.num_classes
@@ -313,7 +334,7 @@ def run_training(
     if checkpoint_dir:
         checkpoint_path = Path(checkpoint_dir) / "best_model.pt"
 
-    metrics_history = {
+    metrics_history: dict[str, list[float]] = {
         "train_loss": [],
         "val_acc": [],
         "val_f1": [],
@@ -322,28 +343,7 @@ def run_training(
     # Track final epoch for logging
     final_epoch = 0
 
-    # Generate unique experiment name if MLflow enabled
-    if enable_mlflow:
-        if experiment_name is None:
-            experiment_name = generate_experiment_name(
-                model_type="graphsage", dataset_path=dataset_path, custom_suffix=f"epochs_{epochs}"
-            )
-
-        # Start MLflow run with comprehensive tracking
-        start_run(
-            experiment=experiment_name,
-            run_name=f"graphsage_train_{datetime.utcnow().strftime('%H%M%S')}",
-            tags={
-                "model_type": "graphsage",
-                "git_hash": get_git_hash(),
-                "dataset_version": get_dataset_version(dataset_path) if dataset_path else "unknown",
-                "device": device_obj.type,
-                "epochs": str(epochs),
-                "batch_size": str(batch_size),
-                "learning_rate": str(lr),
-            },
-        )
-
+    if tracking_enabled:
         # Log training parameters
         training_params = {
             "epochs": epochs,
@@ -355,6 +355,7 @@ def run_training(
             "model_classes": dataset.num_classes,
             "train_samples": len(train_subset),
             "val_samples": len(val_subset),
+            "seed": seed,
         }
         log_run_params(training_params, prefix="training")
 
@@ -367,7 +368,7 @@ def run_training(
         metrics_history["val_f1"].append(val_f1)
 
         # Log metrics to MLflow if enabled
-        if enable_mlflow:
+        if tracking_enabled:
             epoch_metrics = {
                 "train_loss": train_loss,
                 "val_acc": val_acc,
@@ -392,7 +393,7 @@ def run_training(
             )
 
             # Log best model as artifact if MLflow enabled
-            if enable_mlflow and checkpoint_path:
+            if tracking_enabled and checkpoint_path:
                 log_run_artifacts(str(checkpoint_path), "best_model")
 
         # Check early stopping
@@ -406,7 +407,7 @@ def run_training(
             final_epoch = epoch
 
     # Log final metrics and artifacts
-    if enable_mlflow:
+    if tracking_enabled:
         final_metrics = {
             "final_train_loss": metrics_history["train_loss"][-1]
             if metrics_history["train_loss"]
@@ -430,17 +431,95 @@ def run_training(
     return model, metrics_history
 
 
+def run_training(
+    dataset,
+    model: GraphSAGENet | None = None,
+    epochs: int = 5,
+    batch_size: int = 8,
+    lr: float = 1e-3,
+    weight_decay: float = 1e-4,
+    device: str | None = None,
+    early_stopping_patience: int = 3,
+    checkpoint_dir: str | Path | None = None,
+    dataset_path: Path | None = None,
+    experiment_name: str | None = None,
+    enable_mlflow: bool = True,
+    seed: int = 42,
+) -> tuple[GraphSAGENet, dict]:
+    """Run reproducible GraphSAGE training with scoped MLflow tracking."""
+    if not isinstance(dataset, InMemoryDataset):
+        raise TypeError("Dataset must be a torch_geometric InMemoryDataset")
+    if len(dataset) < 2:
+        raise ValueError("Dataset must contain at least two graphs for train/validation splitting")
+    if epochs <= 0 or batch_size <= 0 or early_stopping_patience <= 0:
+        raise ValueError("epochs, batch_size, and early_stopping_patience must be positive")
+    if not math.isfinite(lr) or lr <= 0:
+        raise ValueError("lr must be finite and positive")
+    if not math.isfinite(weight_decay) or weight_decay < 0:
+        raise ValueError("weight_decay must be finite and non-negative")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("seed must be a non-negative integer")
+
+    dataset_version = get_dataset_version(dataset_path) if dataset_path else "not_provided"
+    resolved_experiment = experiment_name or generate_experiment_name(
+        model_type="graphsage",
+        dataset_path=dataset_path,
+        custom_suffix=f"epochs_{epochs}",
+    )
+    resolved_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+
+    implementation_args = {
+        "dataset": dataset,
+        "model": model,
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "lr": lr,
+        "weight_decay": weight_decay,
+        "device": str(resolved_device),
+        "early_stopping_patience": early_stopping_patience,
+        "checkpoint_dir": checkpoint_dir,
+        "seed": seed,
+    }
+    if not enable_mlflow:
+        return _run_training_impl(**implementation_args, tracking_enabled=False)
+
+    with start_run(
+        experiment=resolved_experiment,
+        run_name=f"graphsage_train_{datetime.now(UTC).strftime('%H%M%S')}",
+        tags={
+            "model_type": "graphsage",
+            "git_hash": get_git_hash(),
+            "dataset_version": dataset_version,
+            "device": resolved_device.type,
+            "epochs": str(epochs),
+            "batch_size": str(batch_size),
+            "learning_rate": str(lr),
+            "seed": str(seed),
+        },
+    ) as active_run:
+        return _run_training_impl(
+            **implementation_args,
+            tracking_enabled=active_run is not None,
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser."""
     parser = argparse.ArgumentParser(description="Train the GraphSAGE classifier.")
     parser.add_argument(
         "--dataset", required=True, help="Path to a torch_geometric InMemoryDataset (.pt)."
     )
+    parser.add_argument(
+        "--trust-pickled-dataset",
+        action="store_true",
+        help="Acknowledge that the dataset is trusted; .pt dataset loading can execute code.",
+    )
     parser.add_argument("--epochs", type=int, default=5, help="Maximum number of training epochs.")
     parser.add_argument("--batch-size", type=int, default=8, help="Mini-batch size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay (L2).")
     parser.add_argument("--device", default=None, help="Torch device string (cpu, cuda, etc.).")
+    parser.add_argument("--seed", type=int, default=42, help="Reproducibility seed.")
     parser.add_argument(
         "--early-stopping-patience",
         type=int,
@@ -468,7 +547,10 @@ def main() -> None:
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset not found: {dataset_path}")
 
-    dataset = torch.load(dataset_path)
+    try:
+        dataset = load_graph_dataset(dataset_path, trust_pickle=args.trust_pickled_dataset)
+    except ValueError as exc:
+        parser.error(str(exc))
     model, metrics = run_training(
         dataset=dataset,
         epochs=args.epochs,
@@ -481,11 +563,13 @@ def main() -> None:
         dataset_path=dataset_path,
         experiment_name=args.experiment_name,
         enable_mlflow=not args.no_mlflow,  # Enable MLflow unless disabled
+        seed=args.seed,
     )
 
     # Save metrics
     metrics_path = Path(args.output_metrics)
-    with metrics_path.open("w") as f:
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    with metrics_path.open("w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
     LOGGER.info("Training metrics saved to %s", metrics_path)
 

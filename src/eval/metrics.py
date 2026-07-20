@@ -13,10 +13,12 @@ Metrics are useful for evaluating:
 
 from __future__ import annotations
 
+import importlib
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -96,7 +98,7 @@ def log_evaluation_to_mlflow(
 ) -> dict[str, float]:
     """Compute metrics and log to MLflow if available."""
     try:
-        import mlflow
+        mlflow: Any = importlib.import_module("mlflow")
     except ImportError:
         LOGGER.warning("MLflow not available; skipping experiment logging.")
         mlflow = None

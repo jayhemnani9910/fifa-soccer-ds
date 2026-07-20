@@ -5,22 +5,32 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import math
 import os
 import re
-import subprocess
+import shutil
+
+# Subprocesses use fixed argument vectors and shutil-resolved executables.
+import subprocess  # nosec B404
+import tempfile
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO, cast
 
 import torch
 
 from src.data.la_liga_loader import KaggleDataLoader, version_data_with_dvc
 from src.detect.train_yolo import FineTuneConfig, fine_tune_loop
 from src.detect.yolo_lora_adapter import YOLOLoRAAdapter
-from src.utils.mlflow_helper import start_run
+from src.utils.mlflow_helper import (
+    log_run_artifacts,
+    log_run_metrics,
+    log_run_params,
+    start_run,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -92,9 +102,8 @@ class ModelVersionConflict:
         if comparison == "equal":
             # Equal performance - use newer version
             self.resolution = "auto_equal"
-            self.conflict_reason = (
-                f"Equal performance ({primary_metric}: {self.metrics_a[primary_metric]:.4f})"
-            )
+            metric_value = self.metrics_a.get(primary_metric, 0.0)
+            self.conflict_reason = f"Equal performance ({primary_metric}: {metric_value:.4f})"
             self.resolved_version = max(
                 self.version_a, self.version_b, key=lambda v: (v.major, v.minor, v.patch)
             )
@@ -129,7 +138,9 @@ class ModelVersionManager:
                 return SemanticVersion(1, 0, 0)
         return SemanticVersion(1, 0, 0)
 
-    def increment_version(self, version_type: str = "patch") -> SemanticVersion:
+    def increment_version(
+        self, version_type: str = "patch", metrics: dict[str, float] | None = None
+    ) -> SemanticVersion:
         """Increment version based on change type."""
         current = self.get_current_version()
 
@@ -155,7 +166,7 @@ class ModelVersionManager:
             )
 
         # Update history
-        self._update_version_history(new_version, version_type, current)
+        self._update_version_history(new_version, version_type, current, metrics)
 
         return new_version
 
@@ -179,7 +190,12 @@ class ModelVersionManager:
                         new_metric = new_metrics.get(self.primary_metric, 0.0)
 
                         # If performance is very similar, it might be a conflict
-                        if abs(old_metric - new_metric) < 0.005:  # 0.5% tolerance
+                        if math.isclose(
+                            old_metric,
+                            new_metric,
+                            rel_tol=0.0,
+                            abs_tol=0.005 + 1e-12,
+                        ):  # 0.5 percentage-point tolerance
                             conflict = ModelVersionConflict(
                                 version_a=current_version,
                                 version_b=old_version,
@@ -199,10 +215,14 @@ class ModelVersionManager:
         return None
 
     def _update_version_history(
-        self, new_version: SemanticVersion, version_type: str, previous_version: SemanticVersion
-    ):
+        self,
+        new_version: SemanticVersion,
+        version_type: str,
+        previous_version: SemanticVersion,
+        metrics: dict[str, float] | None = None,
+    ) -> None:
         """Update version history with atomic write."""
-        history_data = {"versions": []}
+        history_data: dict[str, Any] = {"versions": []}
 
         if self.versions_file.exists():
             try:
@@ -216,6 +236,7 @@ class ModelVersionManager:
             "version_type": version_type,
             "timestamp": time.time(),
             "previous_version": str(previous_version),
+            "metrics": dict(metrics or {}),
         }
 
         history_data["versions"].append(version_entry)
@@ -232,7 +253,7 @@ class ModelVersionManager:
         """Get comprehensive version information."""
         current = self.get_current_version()
 
-        info = {
+        info: dict[str, Any] = {
             "current_version": str(current),
             "version_components": current.to_dict(),
             "version_file": str(self.version_file),
@@ -252,99 +273,105 @@ class ModelVersionManager:
 
 
 class RetrainingLock:
-    """File-based distributed lock for retraining coordination."""
+    """File-based lock that coordinates retraining across threads and processes."""
 
     def __init__(
         self,
-        lock_file: Path = Path("/tmp/fifa_weekly_retrain.lock"),
-        timeout: int = 7200,  # 2 hours
+        lock_file: Path | None = None,
+        timeout: float = 7200,
         poll_interval: float = 1.0,
-    ):
+        stale_threshold: float | None = None,
+    ) -> None:
+        if lock_file is None:
+            runtime_root = Path(os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir()))
+            lock_dir = runtime_root / f"fifa-soccer-ds-{os.getuid()}"
+            lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            directory_fd = os.open(
+                lock_dir,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            try:
+                if os.fstat(directory_fd).st_uid != os.getuid():
+                    raise PermissionError(f"Runtime lock directory is not user-owned: {lock_dir}")
+                os.fchmod(directory_fd, 0o700)
+            finally:
+                os.close(directory_fd)
+            lock_file = lock_dir / "weekly-retrain.lock"
         self.lock_file = lock_file
-        self.timeout = timeout
-        self.poll_interval = poll_interval
-        self.lock_fd = None
+        self.timeout = float(timeout)
+        self.poll_interval = max(float(poll_interval), 0.01)
+        self.stale_threshold = float(stale_threshold or timeout)
+        self.lock_fd: TextIO | None = None
+        self._locked = False
 
-    def __enter__(self):
-        """Acquire exclusive lock with timeout."""
-        start_time = time.time()
+    def acquire(self) -> bool:
+        """Acquire the lock, returning ``False`` when the timeout expires."""
+        if self._locked:
+            return True
+
+        self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = self.lock_file.open("a+", encoding="utf-8")
+        start_time = time.monotonic()
 
         while True:
             try:
-                # Create lock file directory
-                self.lock_file.parent.mkdir(parents=True, exist_ok=True)
-                self.lock_fd = open(self.lock_file, "w")
-
-                # Try to acquire exclusive lock
-                fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-                # Lock acquired successfully
-                self.lock_fd.write(f"{os.getpid()}\n{time.time()}\n")
-                self.lock_fd.flush()
-
-                LOGGER.info(f"Acquired retraining lock: {self.lock_file}")
-                return self
-
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                # Lock is held by another process
-                if time.time() - start_time > self.timeout:
-                    raise TimeoutError(f"Could not acquire lock after {self.timeout} seconds")
+                elapsed = time.monotonic() - start_time
+                if elapsed >= self.timeout:
+                    lock_fd.close()
+                    return False
+                time.sleep(min(self.poll_interval, self.timeout - elapsed))
+                continue
 
-                # Check if lock is stale
-                if self._is_stale_lock():
-                    LOGGER.warning("Breaking stale retraining lock")
-                    self._break_stale_lock()
-                    continue
-
-                LOGGER.info(f"Retraining lock held, waiting {self.poll_interval}s...")
-                time.sleep(self.poll_interval)
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Release lock."""
-        if self.lock_fd:
-            try:
-                fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
-                self.lock_fd.close()
-                self.lock_file.unlink(missing_ok=True)
-                LOGGER.info(f"Released retraining lock: {self.lock_file}")
-            except OSError as e:
-                LOGGER.error(f"Error releasing lock: {e}")
-
-    def _is_stale_lock(self) -> bool:
-        """Check if lock file is stale (process dead)."""
-        if not self.lock_file.exists():
-            return False
-
-        try:
-            content = self.lock_file.read_text().strip()
-            if "\n" not in content:
-                return True
-
-            pid_str, timestamp_str = content.split("\n", 1)
-            pid = int(pid_str)
-            lock_time = float(timestamp_str)
-
-            # Check if process still exists
-            try:
-                os.kill(pid, 0)  # Signal 0 checks if process exists
-            except OSError:
-                return True  # Process doesn't exist
-
-            # Check if lock is older than timeout
-            return time.time() - lock_time > self.timeout
-
-        except (ValueError, OSError):
+            lock_fd.seek(0)
+            lock_fd.truncate()
+            lock_fd.write(f"{os.getpid()}\n{time.time()}\n")
+            lock_fd.flush()
+            os.fsync(lock_fd.fileno())
+            self.lock_fd = lock_fd
+            self._locked = True
+            LOGGER.info("Acquired retraining lock: %s", self.lock_file)
             return True
 
-    def _break_stale_lock(self):
-        """Force remove stale lock."""
+    def release(self) -> None:
+        """Release the lock while retaining the inode used by waiting processes."""
+        if self.lock_fd is None:
+            return
         try:
-            if self.lock_fd:
-                self.lock_fd.close()
-            self.lock_file.unlink(missing_ok=True)
-            LOGGER.info("Removed stale retraining lock")
-        except OSError as e:
-            LOGGER.error(f"Failed to remove stale lock: {e}")
+            fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.lock_fd.close()
+            self.lock_fd = None
+            self._locked = False
+        LOGGER.info("Released retraining lock: %s", self.lock_file)
+
+    def is_locked(self) -> bool:
+        """Return whether this instance currently owns the lock."""
+        return self._locked
+
+    def __enter__(self) -> RetrainingLock:
+        if not self.acquire():
+            raise TimeoutError(f"Could not acquire lock after {self.timeout} seconds")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.release()
+
+    def _is_stale_lock(self) -> bool:
+        """Inspect lock metadata without breaking an active operating-system lock."""
+        if not self.lock_file.exists():
+            return False
+        try:
+            pid_text, timestamp_text = self.lock_file.read_text(encoding="utf-8").split("\n", 1)
+            lock_time = float(timestamp_text.strip())
+            try:
+                os.kill(int(pid_text), 0)
+            except OSError:
+                return True
+            return time.time() - lock_time > self.stale_threshold
+        except (ValueError, OSError):
+            return True
 
 
 @contextmanager
@@ -352,47 +379,67 @@ def checkpoint_lock(checkpoint_dir: Path):
     """Context manager for atomic checkpoint operations."""
     lock_file = checkpoint_dir / ".checkpoint.lock"
 
-    try:
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        lock_fd = open(lock_file, "w")
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    with lock_file.open("a+", encoding="utf-8") as lock_fd:
         fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-        yield
-    finally:
         try:
+            yield
+        finally:
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
-            lock_fd.close()
-            lock_file.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 class AtomicFileWriter:
     """Atomic file writing with temp file and rename."""
 
-    def __init__(self, file_path: Path):
+    def __init__(self, file_path: Path) -> None:
         self.file_path = file_path
-        self.temp_path = None
+        self.temp_path: Path | None = None
+        self._handle: TextIO | None = None
 
-    def __enter__(self):
+    def __enter__(self) -> TextIO:
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=self.file_path.parent,
+            prefix=f".{self.file_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        )
+        self._handle = cast(TextIO, handle)
+        self.temp_path = Path(handle.name)
+        return self._handle
 
-        # Create temp file in same directory
-        self.temp_path = self.file_path.with_suffix(f".tmp.{os.getpid()}.{int(time.time())}")
-        return open(self.temp_path, "w")
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self._handle is None or self.temp_path is None:
+            return
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None and self.temp_path and self.temp_path.exists():
-            # Atomic rename
-            self.temp_path.rename(self.file_path)
-        elif self.temp_path and self.temp_path.exists():
-            # Cleanup on error
+        try:
+            if exc_type is None:
+                self._handle.flush()
+                os.fsync(self._handle.fileno())
+            self._handle.close()
+
+            if exc_type is None:
+                os.replace(self.temp_path, self.file_path)
+            else:
+                self.temp_path.unlink(missing_ok=True)
+        except Exception:
             self.temp_path.unlink(missing_ok=True)
+            raise
+        finally:
+            self._handle = None
+            self.temp_path = None
 
 
 def _current_git_commit() -> str:
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        return "unknown"
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+        # The executable is resolved and every argument is constant.
+        result = subprocess.run(  # nosec B603
+            [git_executable, "rev-parse", "HEAD"],
             check=True,
             capture_output=True,
             text=True,
@@ -403,26 +450,26 @@ def _current_git_commit() -> str:
         return "unknown"
 
 
-def _increment_version_safe(version_file: Path) -> int:
-    """Thread-safe version increment with file locking."""
-    try:
-        with open(version_file) as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-            try:
-                if version_file.stat().st_size > 0:
-                    payload = json.loads(f.read())
-                    version = int(payload.get("version", 0)) + 1
-                else:
-                    version = 1
-            except (json.JSONDecodeError, ValueError, TypeError):
-                version = 1
-    except FileNotFoundError:
-        version = 1
+def _increment_version_safe(version_file: Path, snapshot: dict[str, Any] | None = None) -> int:
+    """Atomically increment and persist a dataset version and optional snapshot."""
+    version_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = version_file.with_name(f".{version_file.name}.lock")
 
-    # Atomic write with lock
-    with open(version_file, "w") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        f.write(json.dumps({"version": version}, indent=2))
+    with lock_file.open("a+", encoding="utf-8") as lock_fd:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                payload = json.loads(version_file.read_text(encoding="utf-8"))
+                version = int(payload.get("version", 0)) + 1
+            except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+                version = 1
+
+            payload = dict(snapshot or {})
+            payload["version"] = version
+            with AtomicFileWriter(version_file) as writer:
+                writer.write(json.dumps(payload, indent=2))
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
 
     return version
 
@@ -455,12 +502,12 @@ class WeeklyRetrainer:
     # Version management
     primary_metric: str = "mAP@0.5"
     version_manager: ModelVersionManager | None = field(init=False, default=None)
-    semantic_version_file: Path = field(
-        init=False, default=Path("checkpoints/semantic_version.json")
-    )
+    semantic_version_file: Path | None = None
 
     def __post_init__(self) -> None:
         """Initialize version manager after dataclass creation."""
+        if self.semantic_version_file is None:
+            self.semantic_version_file = self.version_file.parent / "semantic_version.json"
         self.semantic_version_file.parent.mkdir(parents=True, exist_ok=True)
         self.version_manager = ModelVersionManager(self.semantic_version_file, self.primary_metric)
 
@@ -468,39 +515,37 @@ class WeeklyRetrainer:
     def load_new_la_liga_data(self) -> dict[str, Any]:
         LOGGER.info("Refreshing La Liga dataset via Kaggle API")
 
-        # Use atomic file operations for version file
-        with AtomicFileWriter(self.version_file) as f:
-            cached_files = (
-                self.data_loader.download()
-            )  # pragma: no cover (network side effects mocked in tests)
+        cached_files = (
+            self.data_loader.download()
+        )  # pragma: no cover (network side effects mocked in tests)
 
-            try:
-                metadata = self.data_loader.load_metadata()
-            except FileNotFoundError:
-                metadata = []
+        try:
+            metadata = self.data_loader.load_metadata()
+        except FileNotFoundError:
+            metadata = []
 
-            self.current_data_version = _increment_version_safe(self.version_file)
-            dvc_info = version_data_with_dvc(self.data_loader.cache_dir)
-            self.current_dataset_hash = dvc_info["dataset_hash"]
+        dvc_info = version_data_with_dvc(self.data_loader.cache_dir)
+        self.current_dataset_hash = dvc_info["dataset_hash"]
+        serialized_metadata = [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in metadata
+        ]
+        snapshot = {
+            "files": [str(path) for path in cached_files],
+            "metadata": serialized_metadata,
+            "dataset_hash": self.current_dataset_hash,
+        }
+        self.current_data_version = _increment_version_safe(self.version_file, snapshot)
 
-            LOGGER.info(
-                "Dataset version v%s (hash=%s)",
-                self.current_data_version,
-                self.current_dataset_hash,
-            )
-
-            # Write version info atomically
-            version_info = {
-                "files": [str(path) for path in cached_files],
-                "metadata": metadata,
-                "version": self.current_data_version,
-                "dataset_hash": self.current_dataset_hash,
-            }
-            f.write(json.dumps(version_info, indent=2))
+        LOGGER.info(
+            "Dataset version v%s (hash=%s)",
+            self.current_data_version,
+            self.current_dataset_hash,
+        )
 
         return {
             "files": [str(path) for path in cached_files],
-            "metadata": metadata,
+            "metadata": serialized_metadata,
             "version": self.current_data_version,
             "dataset_hash": self.current_dataset_hash,
         }
@@ -513,7 +558,14 @@ class WeeklyRetrainer:
         val_loader = self._resolve_loader(self.val_loader)
 
         summary = self.trainer_fn(adapter, train_loader, val_loader, self.fine_tune_config)
-        current_val_loss = float(summary.get("val_loss", 0.0))
+        raw_val_loss = summary.get("val_loss")
+        if (
+            isinstance(raw_val_loss, bool)
+            or not isinstance(raw_val_loss, int | float)
+            or not math.isfinite(float(raw_val_loss))
+        ):
+            raise RuntimeError("Trainer did not report a finite validation loss")
+        current_val_loss = float(raw_val_loss)
 
         if self.last_best_metrics and current_val_loss > self.last_best_metrics.get(
             "val_loss", float("inf")
@@ -522,7 +574,7 @@ class WeeklyRetrainer:
                 "Validation loss increased; rolling back to checkpoint %s", self.last_checkpoint
             )
             if self.last_checkpoint and self.last_checkpoint.exists():
-                payload = torch.load(self.last_checkpoint, map_location="cpu")
+                payload = torch.load(self.last_checkpoint, map_location="cpu", weights_only=True)
                 adapter.load_state_dict(payload["state_dict"])
                 summary["best_checkpoint"] = self.last_checkpoint.as_posix()
                 summary["rolled_back"] = True
@@ -544,10 +596,12 @@ class WeeklyRetrainer:
                     hash_key="checkpoint_hash",
                 )
 
-        self.last_best_metrics = {
-            "val_loss": float(summary.get("val_loss", 0.0)),
-            "mAP@0.5": float(summary.get("mAP@0.5", 0.0)),
-        }
+        self.last_best_metrics = {"val_loss": current_val_loss}
+        map_score = summary.get("mAP@0.5")
+        if isinstance(map_score, int | float) and not isinstance(map_score, bool):
+            if not math.isfinite(float(map_score)):
+                raise RuntimeError("Trainer reported a non-finite mAP@0.5")
+            self.last_best_metrics["mAP@0.5"] = float(map_score)
         return summary
 
     def evaluate_on_test_set(self) -> dict[str, float]:
@@ -555,16 +609,28 @@ class WeeklyRetrainer:
         if self.evaluator_fn is not None and self._adapter is not None:
             metrics = self.evaluator_fn(self._adapter, test_loader)
         else:
-            metrics = {"mAP@0.5": 0.0, "f1": 0.0}
+            raise RuntimeError(
+                "A trained adapter and evaluator_fn are required; refusing to publish placeholder metrics"
+            )
 
-        if self.test_loader and isinstance(metrics, dict):
-            metrics.setdefault("dataset_version", self.current_data_version or 0)
+        for name, value in metrics.items():
+            if not math.isfinite(float(value)):
+                raise RuntimeError(f"Evaluator reported a non-finite {name}")
+        if self.current_data_version is not None:
+            metrics.setdefault("dataset_version", float(self.current_data_version))
         return metrics
 
     def _register_best_checkpoint(
         self, checkpoint_path: Path, metrics: dict[str, float]
     ) -> dict[str, Any]:
         """Register best checkpoint with MLflow, DVC, and version management."""
+        if not checkpoint_path.is_file():
+            raise FileNotFoundError(f"Best checkpoint not found: {checkpoint_path}")
+        primary_value = metrics.get(self.primary_metric)
+        if primary_value is None or not math.isfinite(float(primary_value)):
+            raise ValueError(
+                f"A finite {self.primary_metric} evaluation metric is required for registration"
+            )
         summary = {
             "checkpoint_path": str(checkpoint_path),
             "metrics": metrics,
@@ -585,35 +651,28 @@ class WeeklyRetrainer:
                 summary["conflict_resolution"] = conflict.resolution
                 summary["resolved_version"] = str(resolved_version)
 
-                # Log conflict to MLflow
-                with start_run(
-                    experiment=f"{self.experiment}-conflicts",
-                    run_name=f"conflict-{int(time.time())}",
-                ):
-                    import mlflow
-
-                    mlflow.log_params(
-                        {
-                            "version_a": str(conflict.version_a),
-                            "version_b": str(conflict.version_b),
-                            "resolution": conflict.resolution,
-                            "reason": conflict.conflict_reason,
-                        }
-                    )
-                    mlflow.log_metrics(
-                        {
-                            "metric_a": conflict.metrics_a.get(self.primary_metric, 0.0),
-                            "metric_b": conflict.metrics_b.get(self.primary_metric, 0.0),
-                            "metric_diff": abs(
-                                conflict.metrics_a.get(self.primary_metric, 0.0)
-                                - conflict.metrics_b.get(self.primary_metric, 0.0)
-                            ),
-                        }
-                    )
+                log_run_params(
+                    {
+                        "conflict.version_a": str(conflict.version_a),
+                        "conflict.version_b": str(conflict.version_b),
+                        "conflict.resolution": conflict.resolution,
+                        "conflict.reason": conflict.conflict_reason,
+                    }
+                )
+                log_run_metrics(
+                    {
+                        "conflict.metric_a": conflict.metrics_a.get(self.primary_metric, 0.0),
+                        "conflict.metric_b": conflict.metrics_b.get(self.primary_metric, 0.0),
+                        "conflict.metric_diff": abs(
+                            conflict.metrics_a.get(self.primary_metric, 0.0)
+                            - conflict.metrics_b.get(self.primary_metric, 0.0)
+                        ),
+                    }
+                )
             else:
                 # No conflict - increment version based on improvement
                 version_type = self._determine_version_type(metrics)
-                new_version = self.version_manager.increment_version(version_type)
+                new_version = self.version_manager.increment_version(version_type, metrics)
                 summary["semantic_version"] = str(new_version)
                 summary["version_type"] = version_type
 
@@ -634,6 +693,7 @@ class WeeklyRetrainer:
 
         self.last_best_metrics = metrics.copy()
         self.last_checkpoint = checkpoint_path
+        log_run_artifacts(checkpoint_path.as_posix(), "best_model")
 
         return summary
 
@@ -661,28 +721,40 @@ class WeeklyRetrainer:
 
     def schedule_retrain(self) -> int:
         try:
-            with start_run(experiment=self.experiment, run_name=None):
-                import mlflow
-
+            lock_path = self.version_file.with_suffix(self.version_file.suffix + ".retrain.lock")
+            with RetrainingLock(lock_file=lock_path, timeout=0.1, poll_interval=0.02):
                 dataset_info = self.load_new_la_liga_data()
-                mlflow.set_tag("mlflow.runName", f"weekly-v{dataset_info['version']}")
-                mlflow.log_param("dataset_version", dataset_info["version"])
-                mlflow.log_param("dataset_hash", dataset_info["dataset_hash"])
-
-                train_summary = self.run_fine_tune_loop()
-                for key, value in train_summary.items():
-                    if isinstance(value, int | float):
-                        mlflow.log_metric(_mlflow_key(f"train_{key}"), value)
-
-                eval_summary = self.evaluate_on_test_set()
-                if isinstance(eval_summary, dict):
-                    mlflow.log_metrics(
+                with start_run(
+                    experiment=self.experiment,
+                    run_name=f"weekly-v{dataset_info['version']}",
+                ):
+                    log_run_params(
                         {
-                            _mlflow_key(f"eval_{k}"): v
+                            "dataset_version": dataset_info["version"],
+                            "dataset_hash": dataset_info["dataset_hash"],
+                        }
+                    )
+
+                    train_summary = self.run_fine_tune_loop()
+                    log_run_metrics(
+                        {
+                            _mlflow_key(f"train_{key}"): float(value)
+                            for key, value in train_summary.items()
+                            if isinstance(value, int | float)
+                        }
+                    )
+
+                    eval_summary = self.evaluate_on_test_set()
+                    log_run_metrics(
+                        {
+                            _mlflow_key(f"eval_{k}"): float(v)
                             for k, v in eval_summary.items()
                             if isinstance(v, int | float)
                         }
                     )
+                    if self.last_checkpoint is None:
+                        raise RuntimeError("Trainer did not produce a checkpoint")
+                    self._register_best_checkpoint(self.last_checkpoint, eval_summary)
 
             return 0
         except Exception as exc:  # pragma: no cover - ensures cron-friendly exit codes
@@ -712,7 +784,8 @@ class WeeklyRetrainer:
             )
 
         meta_path = checkpoint.with_suffix(checkpoint.suffix + ".meta.json")
-        meta_path.write_text(json.dumps(metadata, indent=2))
+        with AtomicFileWriter(meta_path) as writer:
+            writer.write(json.dumps(metadata, indent=2))
 
     def _resolve_loader(self, loader: Any) -> Any:
         if callable(loader):
@@ -721,21 +794,11 @@ class WeeklyRetrainer:
 
 
 def main() -> int:  # pragma: no cover - CLI entrypoint
-    from torch.utils.data import DataLoader
-
-    from src.data.la_liga_loader import KaggleDataLoader
-
-    loader = KaggleDataLoader(dataset="laliga/dataset")
-    # Placeholder dataloaders; real implementation should hook actual datasets.
-    dummy_loader = DataLoader([])
-
-    retrainer = WeeklyRetrainer(
-        data_loader=loader,
-        train_loader=dummy_loader,
-        val_loader=None,
-        test_loader=None,
+    LOGGER.error(
+        "WeeklyRetrainer requires application-supplied train/validation/test loaders and an "
+        "evaluator; construct it from a deployment-specific launcher."
     )
-    return retrainer.schedule_retrain()
+    return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,51 @@ except ImportError:  # pragma: no cover - optional dependency
     CV2_AVAILABLE = False
 
 PointList = Iterable[tuple[float, float]]
+_MAX_CALIBRATION_FILE_BYTES = 1_048_576
+
+
+def _validated_matrix(matrix: np.ndarray) -> np.ndarray:
+    candidate = np.asarray(matrix, dtype=np.float64)
+    if candidate.shape != (3, 3) or not np.isfinite(candidate).all():
+        raise ValueError("Homography matrix must be a finite 3x3 array")
+    return candidate
+
+
+def _validated_points(points: PointList, *, name: str) -> np.ndarray:
+    values = list(points)
+    if not values:
+        return np.empty((0, 2), dtype=np.float64)
+    candidate = np.asarray(values, dtype=np.float64)
+    if candidate.shape != (len(values), 2) or not np.isfinite(candidate).all():
+        raise ValueError(f"{name} must contain finite two-dimensional coordinate pairs")
+    return candidate
+
+
+def _validated_point(point: np.ndarray) -> tuple[float, float]:
+    candidate = np.asarray(point, dtype=np.float64)
+    if candidate.shape != (2,) or not np.isfinite(candidate).all():
+        raise ValueError("point must be a finite two-dimensional coordinate pair")
+    return float(candidate[0]), float(candidate[1])
+
+
+def _validated_image_shape(raw: object) -> tuple[int, int]:
+    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+        raise ValueError("image_shape must contain height and width")
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value <= 0
+        for value in raw
+    ):
+        raise ValueError("image_shape values must be positive integers")
+    return int(raw[0]), int(raw[1])
+
+
+def _validated_pitch_dimensions(raw: object) -> tuple[float, float]:
+    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+        raise ValueError("pitch_dimensions must contain length and width")
+    dimensions = (float(raw[0]), float(raw[1]))
+    if not np.isfinite(dimensions).all() or min(dimensions) <= 0:
+        raise ValueError("pitch_dimensions values must be finite and positive")
+    return dimensions
 
 
 def _cv2_circle(img, center, radius, color, thickness=-1):
@@ -80,7 +125,7 @@ def _cv2_find_homography(src_points, dst_points, ransac_threshold):
         return cv2.findHomography(
             src_points,
             dst_points,
-            method=getattr(cv2, "RANSAC", None),
+            method=int(getattr(cv2, "RANSAC", 0)),
             ransacReprojThreshold=ransac_threshold,
         )
     return None, None
@@ -108,10 +153,8 @@ def apply_homography(points: PointList, matrix: np.ndarray) -> list[tuple[float,
     Raises:
         ValueError: If homography matrix is invalid
     """
-    if matrix.shape != (3, 3):
-        raise ValueError(f"Homography matrix must be 3x3, got {matrix.shape}")
-
-    points_array = np.asarray(list(points), dtype=np.float32)
+    homography = _validated_matrix(matrix)
+    points_array = _validated_points(points, name="points")
     if points_array.shape[0] == 0:
         return []
 
@@ -120,10 +163,13 @@ def apply_homography(points: PointList, matrix: np.ndarray) -> list[tuple[float,
     points_homo = np.hstack([points_array, ones])
 
     # Apply transformation
-    transformed = points_homo @ matrix.T
+    transformed = points_homo @ homography.T
 
     # Convert back to Euclidean coordinates
-    result = transformed[:, :2] / transformed[:, 2:3]
+    denominators = transformed[:, 2:3]
+    if not np.isfinite(transformed).all() or np.isclose(denominators, 0.0, atol=1e-12).any():
+        raise ValueError("Homography projects one or more points to infinity")
+    result = transformed[:, :2] / denominators
 
     return [(float(point[0]), float(point[1])) for point in result]
 
@@ -218,21 +264,18 @@ class HomographyCalibrator:
         if len(image_points) != len(world_points):
             raise ValueError("Number of image and world points must match")
 
-        self.image_points = [np.array(p, dtype=np.float32) for p in image_points]
-        self.world_points = [np.array(p, dtype=np.float32) for p in world_points]
-        self.image_shape = image_shape
+        if not np.isfinite(ransac_threshold) or ransac_threshold <= 0:
+            raise ValueError("ransac_threshold must be finite and positive")
+        validated_shape = _validated_image_shape(image_shape)
+        image_array = _validated_points(image_points, name="image_points")
+        world_array = _validated_points(world_points, name="world_points")
 
         # Compute homography with RANSAC
-        result = compute_homography(self.world_points, self.image_points, ransac_threshold)
-
-        if result.matrix is None:
-            raise RuntimeError("Homography computation failed - check point correspondences")
-
-        self.H = result.matrix
-        self.H_inv = np.linalg.inv(self.H)
-
-        # Calculate reprojection error
-        self.reprojection_error = self._compute_reprojection_error()
+        result = compute_homography(
+            [(float(point[0]), float(point[1])) for point in world_array],
+            [(float(point[0]), float(point[1])) for point in image_array],
+            ransac_threshold,
+        )
 
         # Validate calibration quality
         min_inliers = max(4, int(len(image_points) * 0.7))
@@ -241,8 +284,23 @@ class HomographyCalibrator:
                 f"Poor calibration quality: only {result.inliers}/{len(image_points)} inliers"
             )
 
-        if self.reprojection_error > ransac_threshold * 2:
-            raise ValueError(f"High reprojection error: {self.reprojection_error:.2f}px")
+        homography = _validated_matrix(result.matrix)
+        try:
+            inverse = np.linalg.inv(homography)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError("Computed homography is not invertible") from exc
+        projected = np.asarray(apply_homography(world_points, homography))
+        reprojection_error = float(np.mean(np.linalg.norm(projected - image_array, axis=1)))
+        if not np.isfinite(reprojection_error) or reprojection_error > ransac_threshold * 2:
+            raise ValueError(f"High reprojection error: {reprojection_error:.2f}px")
+
+        # Publish a new calibration only after every quality check succeeds.
+        self.H = homography
+        self.H_inv = inverse
+        self.image_points = [point.astype(np.float32) for point in image_array]
+        self.world_points = [point.astype(np.float32) for point in world_array]
+        self.image_shape = validated_shape
+        self.reprojection_error = reprojection_error
 
         return True
 
@@ -262,17 +320,15 @@ class HomographyCalibrator:
         """Project world point to image coordinates."""
         if self.H is None:
             raise ValueError("Calibrator not initialized - call calibrate_from_points first")
-        point_homog = np.array([point[0], point[1], 1.0], dtype=np.float32)
-        image_homog = self.H @ point_homog
-        return (image_homog[:2] / image_homog[2]).astype(np.float32)
+        projected = apply_homography([_validated_point(point)], self.H)
+        return np.asarray(projected[0], dtype=np.float32)
 
     def project_image_to_world(self, point: np.ndarray) -> np.ndarray:
         """Project image point to world coordinates."""
         if self.H_inv is None:
             raise ValueError("Calibrator not initialized - call calibrate_from_points first")
-        point_homog = np.array([point[0], point[1], 1.0], dtype=np.float32)
-        world_homog = self.H_inv @ point_homog
-        return (world_homog[:2] / world_homog[2]).astype(np.float32)
+        projected = apply_homography([_validated_point(point)], self.H_inv)
+        return np.asarray(projected[0], dtype=np.float32)
 
     def save_calibration(self, path: Path) -> None:
         """
@@ -293,7 +349,7 @@ class HomographyCalibrator:
             image_points=[p.tolist() for p in self.image_points],
             world_points=[p.tolist() for p in self.world_points],
             reprojection_error=self.reprojection_error,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             image_shape=self.image_shape or (0, 0),
             pitch_dimensions=self.pitch_dimensions,
         )
@@ -318,25 +374,47 @@ class HomographyCalibrator:
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"Calibration file not found: {path}")
+        if path.stat().st_size > _MAX_CALIBRATION_FILE_BYTES:
+            raise ValueError("Calibration file exceeds the 1 MiB size limit")
 
-        with open(path) as f:
+        with path.open(encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("Calibration file must contain a JSON object")
 
-        instance = cls(config)
-        instance.H = np.array(data["homography"], dtype=np.float32)
-        instance.H_inv = np.array(data["inverse_homography"], dtype=np.float32)
-        instance.image_points = [np.array(p, dtype=np.float32) for p in data["image_points"]]
-        instance.world_points = [np.array(p, dtype=np.float32) for p in data["world_points"]]
-        instance.reprojection_error = data["reprojection_error"]
-        instance.image_shape = tuple(data["image_shape"])
-        instance.pitch_dimensions = tuple(data.get("pitch_dimensions", (105.0, 68.0)))
+        try:
+            homography = _validated_matrix(np.asarray(data["homography"]))
+            image_array = _validated_points(data["image_points"], name="image_points")
+            world_array = _validated_points(data["world_points"], name="world_points")
+            image_shape = _validated_image_shape(data["image_shape"])
+            pitch_dimensions = _validated_pitch_dimensions(
+                data.get("pitch_dimensions", (105.0, 68.0))
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Calibration file has an invalid schema") from exc
+        if len(image_array) < 4 or image_array.shape != world_array.shape:
+            raise ValueError("Calibration requires at least four matching point pairs")
+        try:
+            inverse = np.linalg.inv(homography)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError("Loaded homography is not invertible") from exc
+        projected = np.asarray(apply_homography(world_array, homography))
+        reprojection_error = float(np.mean(np.linalg.norm(projected - image_array, axis=1)))
 
         # Validate loaded calibration
-        if instance.reprojection_error > 10.0:  # High error threshold
+        if not np.isfinite(reprojection_error) or reprojection_error > 10.0:
             raise ValueError(
-                f"Loaded calibration has poor quality: {instance.reprojection_error:.2f}px error"
+                f"Loaded calibration has poor quality: {reprojection_error:.2f}px error"
             )
 
+        instance = cls(config)
+        instance.H = homography
+        instance.H_inv = inverse
+        instance.image_points = [point.astype(np.float32) for point in image_array]
+        instance.world_points = [point.astype(np.float32) for point in world_array]
+        instance.reprojection_error = reprojection_error
+        instance.image_shape = image_shape
+        instance.pitch_dimensions = pitch_dimensions
         return instance
 
     def visualize_calibration(
@@ -432,7 +510,7 @@ class PitchCalibration:
         Args:
             H: Homography matrix (world to image). If None, identity matrix used.
         """
-        self.H = H if H is not None else np.eye(3, dtype=np.float32)
+        self.H = _validated_matrix(H if H is not None else np.eye(3, dtype=np.float32))
         try:
             self.H_inv = np.linalg.inv(self.H)
         except np.linalg.LinAlgError as exc:
@@ -484,8 +562,10 @@ def compute_homography(
     if not CV2_AVAILABLE:
         raise ImportError("OpenCV (cv2) is required for homography computation.")
 
-    src_points = np.asarray(list(src), dtype=np.float32)
-    dst_points = np.asarray(list(dst), dtype=np.float32)
+    if not np.isfinite(ransac_threshold) or ransac_threshold <= 0:
+        raise ValueError("ransac_threshold must be finite and positive")
+    src_points = _validated_points(src, name="src")
+    dst_points = _validated_points(dst, name="dst")
     if src_points.shape != dst_points.shape or src_points.shape[0] < 4:
         raise ValueError("At least four matching point pairs are required.")
 
@@ -494,4 +574,4 @@ def compute_homography(
         raise RuntimeError("Failed to compute homography.")
 
     inliers = int(mask.sum())
-    return HomographyResult(matrix=matrix, inliers=inliers, total=int(mask.size))
+    return HomographyResult(matrix=_validated_matrix(matrix), inliers=inliers, total=int(mask.size))

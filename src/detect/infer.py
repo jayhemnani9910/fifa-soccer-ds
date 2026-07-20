@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 try:
-    import cv2
+    cv2: Any = importlib.import_module("cv2")
 except ImportError:  # pragma: no cover - optional dependency
-    cv2 = None  # type: ignore[assignment]
+    cv2 = None
 
 try:
-    from ultralytics import YOLO
+    YOLO: Any = importlib.import_module("ultralytics").YOLO
 except ImportError:  # pragma: no cover - handled gracefully for environments without ultralytics
-    YOLO = None  # type: ignore[assignment]
+    YOLO = None
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +38,14 @@ class InferenceConfig:
     confidence: float = 0.4
     max_frames: int = 30
 
+    def __post_init__(self) -> None:
+        if not self.weights.strip():
+            raise ValueError("weights must not be empty")
+        if not math.isfinite(self.confidence) or not 0 <= self.confidence <= 1:
+            raise ValueError("confidence must be a finite value within [0, 1]")
+        if self.max_frames < 1:
+            raise ValueError("max_frames must be at least 1")
+
 
 def _resolve_device(device: str) -> str:
     if device == "cuda_if_available":
@@ -46,7 +57,7 @@ def _resolve_device(device: str) -> str:
     return device
 
 
-def load_model(config: InferenceConfig) -> YOLO:
+def load_model(config: InferenceConfig) -> Any:
     """Load a YOLOv8 model given the configuration."""
 
     if YOLO is None:
@@ -60,7 +71,7 @@ def load_model(config: InferenceConfig) -> YOLO:
 def run_inference(
     image_path: str | Path,
     config: InferenceConfig | None = None,
-    model: YOLO | None = None,
+    model: Any | None = None,
 ):
     """Execute a one-off inference run to verify the model pipeline."""
 
@@ -71,7 +82,17 @@ def run_inference(
 
     detector = model or load_model(cfg)
     results = detector.predict(image.as_posix(), conf=cfg.confidence, verbose=False)
-    return results[0]
+    result = first_prediction(results)
+    if result is None:
+        raise RuntimeError("Detector returned no result for the input image")
+    return result
+
+
+def first_prediction(results: Iterable[Any] | None) -> Any | None:
+    """Return the first item from list or streaming detector output."""
+    if results is None:
+        return None
+    return next(iter(results), None)
 
 
 def _tensor_to_list(values: Any) -> list[float]:
@@ -179,7 +200,7 @@ def _write_overlay(image_array: Any, path: Path) -> Path | None:
 
 
 def run_image_detection(
-    model: YOLO,
+    model: Any,
     image_path: Path,
     output_dir: Path,
     config: InferenceConfig,
@@ -209,7 +230,7 @@ def run_image_detection(
 
 
 def run_video_detection(
-    model: YOLO,
+    model: Any,
     video_path: Path,
     output_dir: Path,
     config: InferenceConfig,
@@ -288,6 +309,9 @@ def run(
             summary["video"] = run_video_detection(detector, video, output_path, cfg, max_frames)
         else:
             LOGGER.warning("Skipping video inference; file not found: %s", video)
+
+    if "image" not in summary and "video" not in summary:
+        raise FileNotFoundError("No existing image or video input was provided")
 
     return summary
 

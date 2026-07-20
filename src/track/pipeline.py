@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from src.detect.infer import InferenceConfig, extract_detections, load_model
 from src.detect.video_streaming import stream_video_detections
@@ -83,21 +85,21 @@ def _nms_per_class(detections: list[dict], iou_threshold: float) -> list[dict]:
         by_class.setdefault(det.get("class_name"), []).append(det)
 
     try:
-        import torch
-        from torchvision.ops import nms as tv_nms
+        torch_module: Any = importlib.import_module("torch")
+        torchvision_nms: Any = importlib.import_module("torchvision.ops").nms
     except ImportError:
-        torch = None
-        tv_nms = None
+        torch_module = None
+        torchvision_nms = None
 
     kept: list[dict] = []
     for group in by_class.values():
         if len(group) <= 1:
             kept.extend(group)
             continue
-        if tv_nms is not None:
-            boxes = torch.tensor([d["bbox"][:4] for d in group], dtype=torch.float32)
-            scores = torch.tensor([d["score"] for d in group], dtype=torch.float32)
-            idxs = tv_nms(boxes, scores, iou_threshold).tolist()
+        if torchvision_nms is not None and torch_module is not None:
+            boxes = torch_module.tensor([d["bbox"][:4] for d in group], dtype=torch_module.float32)
+            scores = torch_module.tensor([d["score"] for d in group], dtype=torch_module.float32)
+            idxs = torchvision_nms(boxes, scores, iou_threshold).tolist()
             kept.extend(group[i] for i in idxs)
         else:
             kept.extend(_nms_numpy(group, iou_threshold))

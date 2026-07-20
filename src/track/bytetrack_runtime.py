@@ -14,6 +14,7 @@ Key classes:
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -24,8 +25,16 @@ from scipy.optimize import linear_sum_assignment
 
 
 def _bbox_is_valid(bbox: Iterable[float]) -> bool:
-    coords = list(bbox)
-    return len(coords) == 4 and coords[2] > coords[0] and coords[3] > coords[1]
+    try:
+        coords = [float(value) for value in bbox]
+    except (TypeError, ValueError):
+        return False
+    return (
+        len(coords) == 4
+        and all(math.isfinite(value) for value in coords)
+        and coords[2] > coords[0]
+        and coords[3] > coords[1]
+    )
 
 
 def _bbox_to_measurement(bbox: Iterable[float]) -> np.ndarray:
@@ -95,7 +104,8 @@ class SimpleKalmanFilter:
         z_pred = self.H @ self.state
         innovation = measurement - z_pred
         S = self.H @ self.cov @ self.H.T + self.R
-        K = self.cov @ self.H.T @ np.linalg.inv(S)
+        covariance_times_h = self.cov @ self.H.T
+        K = np.linalg.solve(S, covariance_times_h.T).T
         self.state = self.state + K @ innovation
         self.cov = (self.I - K @ self.H) @ self.cov
         return _measurement_to_bbox(self.state[:, 0])
@@ -171,12 +181,21 @@ class ByteTrackRuntime:
         self.max_age = max_age
         self.max_track_id = max_track_id
         self.id_reuse_delay = id_reuse_delay
+        if not 0 <= min_confidence <= 1:
+            raise ValueError("min_confidence must be within [0, 1]")
+        if not math.isfinite(distance_threshold) or distance_threshold <= 0:
+            raise ValueError("distance_threshold must be a positive finite value")
+        if max_age < 0 or max_track_id < 1 or id_reuse_delay < 0:
+            raise ValueError(
+                "max_age/id_reuse_delay must be non-negative and max_track_id positive"
+            )
 
         # Enhanced ID management with reuse pool
         self._next_track_id = 0
         self._id_pool: deque[int] = deque()  # Reusable IDs
         self._id_release_time: dict[int, int] = {}  # Track when IDs become available
         self._tracks: list[_TrackState] = []
+        self._last_frame_id: int | None = None
 
         # Statistics for monitoring
         self._total_tracks_created = 0
@@ -186,13 +205,23 @@ class ByteTrackRuntime:
         """Assign track IDs to detections using greedy matching."""
 
         # Track current frame for ID reuse timing
+        if frame_id < 0:
+            raise ValueError("frame_id must be non-negative")
+        if self._last_frame_id is not None and frame_id < self._last_frame_id:
+            raise ValueError("frame_id must be monotonically non-decreasing")
+        self._last_frame_id = frame_id
         self._current_frame = frame_id
 
         valid_detections: list[dict[str, Any]] = []
         for det in detections:
             score = float(det.get("score", 0.0) or 0.0)
             bbox = det.get("bbox", [])
-            if score < self.min_confidence or not _bbox_is_valid(bbox):
+            if (
+                not math.isfinite(score)
+                or not 0 <= score <= 1
+                or score < self.min_confidence
+                or not _bbox_is_valid(bbox)
+            ):
                 continue
             valid_detections.append(
                 {
@@ -212,6 +241,12 @@ class ByteTrackRuntime:
             for det_idx, det in enumerate(valid_detections):
                 det_center = _center(det["bbox"])
                 distance = float(np.linalg.norm(track_center - det_center))
+                if (
+                    self._tracks[track_idx].class_id is not None
+                    and det.get("class_id") is not None
+                    and self._tracks[track_idx].class_id != det.get("class_id")
+                ):
+                    distance = self.distance_threshold + 1.0
                 cost_matrix[track_idx, det_idx] = distance
 
         # Solve optimal assignment using Hungarian algorithm
@@ -306,6 +341,7 @@ class ByteTrackRuntime:
                 self._id_pool.remove(track_id)
                 del self._id_release_time[track_id]
                 self._total_ids_reused += 1
+                self._total_tracks_created += 1
                 return track_id
 
         # Allocate new ID if no reusable ones available
@@ -313,17 +349,10 @@ class ByteTrackRuntime:
             track_id = self._next_track_id
             self._next_track_id += 1
         else:
-            # Handle ID overflow - wrap around or reuse oldest
-            if self._id_pool:
-                track_id = self._id_pool.popleft()  # Emergency reuse
-                if track_id in self._id_release_time:
-                    del self._id_release_time[track_id]
-                self._total_ids_reused += 1
-            else:
-                # Last resort: reset to 0 (rare case)
-                self._next_track_id = 0
-                track_id = self._next_track_id
-                self._next_track_id += 1
+            raise RuntimeError(
+                "Track ID capacity exhausted before an inactive ID became reusable; "
+                "increase max_track_id or reduce id_reuse_delay"
+            )
 
         self._total_tracks_created += 1
         return track_id
@@ -335,7 +364,7 @@ class ByteTrackRuntime:
             self._id_release_time[track_id] = current_frame
 
             # Limit pool size to prevent memory leaks
-            max_pool_size = min(100, self.max_track_id // 10)
+            max_pool_size = max(1, min(100, self.max_track_id // 10))
             while len(self._id_pool) > max_pool_size:
                 old_id = self._id_pool.popleft()
                 if old_id in self._id_release_time:

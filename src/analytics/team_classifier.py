@@ -6,18 +6,20 @@ clustering. Handles automatic team assignment from video frames.
 
 from __future__ import annotations
 
+import importlib
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 try:
-    import cv2
+    cv2: Any = importlib.import_module("cv2")
 except ImportError:
     cv2 = None
 
 try:
-    from sklearn.cluster import KMeans
+    KMeans: Any = importlib.import_module("sklearn.cluster").KMeans
 except ImportError:
     KMeans = None
 
@@ -60,6 +62,10 @@ class JerseyColorClassifier:
                 "OpenCV is required for team classification. "
                 "Install with: pip install opencv-python"
             )
+        if n_teams < 1:
+            raise ValueError("n_teams must be positive")
+        if min_samples < 1:
+            raise ValueError("min_samples must be positive")
 
         self.n_teams = n_teams
         self.min_samples = min_samples
@@ -68,7 +74,7 @@ class JerseyColorClassifier:
         # Number of clusters: teams + optional referee
         self.n_clusters = n_teams + (1 if referee_detection else 0)
 
-        self.kmeans: KMeans | None = None
+        self.kmeans: Any | None = None
         self.cluster_to_team: dict[int, int] = {}
         self.cluster_colors: dict[int, tuple[int, int, int]] = {}
 
@@ -151,16 +157,17 @@ class JerseyColorClassifier:
         Args:
             color_samples: List of (track_id, color_array) tuples.
         """
-        if len(color_samples) < self.min_samples:
+        required_samples = max(self.min_samples, self.n_clusters)
+        if len(color_samples) < required_samples:
             LOGGER.warning(
-                "Insufficient samples for clustering: %d < %d", len(color_samples), self.min_samples
+                "Insufficient samples for clustering: %d < %d",
+                len(color_samples),
+                required_samples,
             )
             return
 
         # Extract just the colors for clustering
         colors = np.array([sample[1] for sample in color_samples], dtype=np.float64)
-        track_ids = [sample[0] for sample in color_samples]
-
         LOGGER.info("Fitting K-Means with %d samples, %d clusters", len(colors), self.n_clusters)
 
         # Fit K-Means
@@ -168,24 +175,30 @@ class JerseyColorClassifier:
         labels = self.kmeans.fit_predict(colors)
 
         # Analyze clusters to assign team IDs
-        self._assign_teams_to_clusters(colors, labels, track_ids)
+        self._assign_teams_to_clusters(labels)
 
-    def _assign_teams_to_clusters(
-        self, colors: np.ndarray, labels: np.ndarray, track_ids: list[int]
-    ) -> None:
+    def _assign_teams_to_clusters(self, labels: np.ndarray) -> None:
         """Assign team IDs to clusters based on cluster characteristics."""
 
-        cluster_sizes = {}
-        cluster_colors = {}
+        model = self.kmeans
+        if model is None:
+            raise RuntimeError("K-Means model is not fitted")
+
+        cluster_sizes: dict[int, int] = {}
+        cluster_colors: dict[int, tuple[int, int, int]] = {}
 
         for cluster_id in range(self.n_clusters):
             mask = labels == cluster_id
-            cluster_sizes[cluster_id] = np.sum(mask)
+            cluster_sizes[cluster_id] = int(np.sum(mask))
 
             if cluster_sizes[cluster_id] > 0:
                 # Get centroid color (mean of cluster)
-                centroid = self.kmeans.cluster_centers_[cluster_id]
-                cluster_colors[cluster_id] = tuple(map(int, centroid))
+                centroid = model.cluster_centers_[cluster_id]
+                cluster_colors[cluster_id] = (
+                    int(centroid[0]),
+                    int(centroid[1]),
+                    int(centroid[2]),
+                )
 
         self.cluster_colors = cluster_colors
 
@@ -247,7 +260,10 @@ class JerseyColorClassifier:
         Returns:
             Dictionary of track_id -> TeamAssignment.
         """
-        # Step 1: Collect color samples from each track
+        if sample_frames < 1:
+            raise ValueError("sample_frames must be positive")
+
+        # Step 1: Collect a bounded number of color samples from each track
         color_samples = []
         track_colors: dict[int, list[np.ndarray]] = {}
 
@@ -260,6 +276,9 @@ class JerseyColorClassifier:
                 continue
 
             if frame_id not in frames:
+                continue
+
+            if len(track_colors.get(track_id, [])) >= sample_frames:
                 continue
 
             frame = frames[frame_id]
@@ -277,11 +296,11 @@ class JerseyColorClassifier:
         )
 
         # Step 2: Fit classifier if enough samples
-        if len(color_samples) >= self.min_samples:
+        if len(color_samples) >= max(self.min_samples, self.n_clusters):
             self.fit(color_samples)
         else:
-            LOGGER.warning("Insufficient samples, using position-based fallback")
-            return self._position_based_fallback(tracklets)
+            LOGGER.warning("Insufficient samples; team identity remains unknown")
+            return self._unknown_assignments(tracklets)
 
         # Step 3: Classify each track using median color
         assignments: dict[int, TeamAssignment] = {}
@@ -307,44 +326,17 @@ class JerseyColorClassifier:
 
         return assignments
 
-    def _position_based_fallback(self, tracklets: list[dict]) -> dict[int, TeamAssignment]:
-        """Fallback to position-based team assignment.
-
-        Assigns team based on average x-position:
-        - Left half of pitch = home team (0)
-        - Right half of pitch = away team (1)
-        """
+    def _unknown_assignments(self, tracklets: list[dict]) -> dict[int, TeamAssignment]:
+        """Represent tracks honestly when jersey classification is unavailable."""
         assignments: dict[int, TeamAssignment] = {}
-        track_positions: dict[int, list[float]] = {}
-
         for tracklet in tracklets:
             track_id = tracklet.get("track_id")
-            bbox = tracklet.get("bbox")
-
-            if track_id is None or bbox is None:
+            if not isinstance(track_id, int) or isinstance(track_id, bool):
                 continue
-
-            # Get center x position (normalized assumption)
-            center_x = (bbox[0] + bbox[2]) / 2
-
-            if track_id not in track_positions:
-                track_positions[track_id] = []
-            track_positions[track_id].append(center_x)
-
-        for track_id, positions in track_positions.items():
-            avg_x = np.mean(positions)
-
-            # Assume normalized coordinates or pixel coordinates
-            # Use 0.5 as midpoint for normalized, estimate for pixels
-            if avg_x < 0.5 or (avg_x > 1 and avg_x < 960):  # Assuming 1920 width
-                team_id = 0  # Home team (left side)
-            else:
-                team_id = 1  # Away team (right side)
-
             assignments[track_id] = TeamAssignment(
                 track_id=track_id,
-                team_id=team_id,
-                confidence=0.3,  # Low confidence for position-based
+                team_id=-1,
+                confidence=0.0,
                 dominant_color=(128, 128, 128),
                 cluster_id=-1,
             )

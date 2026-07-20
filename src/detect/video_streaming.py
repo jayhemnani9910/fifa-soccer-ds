@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import importlib
+import math
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 try:
-    from ultralytics import YOLO
+    YOLO: Any = importlib.import_module("ultralytics").YOLO
 except ImportError:  # pragma: no cover
-    YOLO = None  # type: ignore[assignment]
+    YOLO = None
 
 
 def stream_video_detections(
-    model: YOLO,
+    model: Any,
     video_path: str | Path,
     conf: float = 0.25,
     max_frames: int | None = None,
@@ -31,6 +34,10 @@ def stream_video_detections(
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
+    if not math.isfinite(conf) or not 0 <= conf <= 1:
+        raise ValueError("conf must be a finite value within [0, 1]")
+    if max_frames is not None and max_frames < 1:
+        raise ValueError("max_frames must be at least 1 when provided")
 
     predictions = model.predict(
         source=video_path.as_posix(),

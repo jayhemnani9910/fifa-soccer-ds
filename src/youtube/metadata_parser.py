@@ -7,7 +7,7 @@ from YouTube videos for content analysis.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.schemas import VideoMetadata, validate_video_metadata, validate_youtube_url
@@ -159,10 +159,10 @@ class YouTubeMetadataParser:
 
             # Combine metadata and analysis
             metadata = {
-                **validated_metadata.dict(),
+                **validated_metadata.model_dump(mode="python"),
                 "analysis": analysis,
                 "validation": validation_result,
-                "extraction_timestamp": datetime.now().isoformat(),
+                "extraction_timestamp": datetime.now(UTC).isoformat(),
             }
 
             LOGGER.info("Metadata extraction complete: %s", validated_metadata.title)
@@ -177,6 +177,9 @@ class YouTubeMetadataParser:
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
+            "noplaylist": True,
+            "socket_timeout": 30,
+            "nocheckcertificate": False,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -220,10 +223,10 @@ class YouTubeMetadataParser:
 
     def _analyze_content(self, video_info: dict[str, Any]) -> dict[str, Any]:
         """Analyze video content for soccer relevance."""
-        title = video_info.get("title", "").lower()
-        description = video_info.get("description", "").lower()
-        tags = [tag.lower() for tag in video_info.get("tags", [])]
-        uploader = video_info.get("uploader", "").lower()
+        title = str(video_info.get("title") or "").lower()
+        description = str(video_info.get("description") or "").lower()
+        tags = [str(tag).lower() for tag in (video_info.get("tags") or [])]
+        uploader = str(video_info.get("uploader") or "").lower()
 
         # Combine all text for analysis
         full_text = f"{title} {description} {' '.join(tags)}"
@@ -238,7 +241,7 @@ class YouTubeMetadataParser:
         keyword_score = len(keyword_matches) / len(self.soccer_keywords)
 
         # Duration analysis
-        duration = video_info.get("duration", 0)
+        duration = video_info.get("duration")
         duration_category = self._categorize_duration(duration)
 
         # Content type analysis
@@ -347,10 +350,10 @@ class YouTubeMetadataParser:
 
     def _analyze_engagement(self, video_info: dict[str, Any]) -> dict[str, Any]:
         """Analyze engagement metrics."""
-        view_count = video_info.get("view_count", 0)
-        like_count = video_info.get("like_count", 0)
-        comment_count = video_info.get("comment_count", 0)
-        duration = video_info.get("duration", 1)
+        view_count = int(video_info.get("view_count") or 0)
+        like_count = int(video_info.get("like_count") or 0)
+        comment_count = int(video_info.get("comment_count") or 0)
+        duration = float(video_info.get("duration") or 0)
 
         # Calculate engagement metrics
         like_rate = (like_count / max(view_count, 1)) * 100 if view_count else 0
@@ -479,58 +482,36 @@ class YouTubeMetadataParser:
 
     def _create_validated_metadata(self, video_info: dict[str, Any]) -> VideoMetadata:
         """Create validated VideoMetadata from raw video info."""
-        try:
-            # Convert upload_date string to datetime
-            upload_date_str = video_info.get("upload_date")
-            if upload_date_str:
-                upload_date = datetime.strptime(upload_date_str, "%Y%m%d")
-            else:
-                upload_date = datetime.now()
+        upload_date_str = video_info.get("upload_date")
+        upload_date = (
+            datetime.strptime(upload_date_str, "%Y%m%d").replace(tzinfo=UTC)
+            if upload_date_str
+            else None
+        )
 
-            # Create VideoMetadata with proper field mapping
-            metadata = VideoMetadata(
-                video_id=video_info.get("id", ""),
-                title=video_info.get("title", ""),
-                description=video_info.get("description", ""),
-                duration_seconds=video_info.get("duration", 0),
-                channel_title=video_info.get("uploader", ""),
-                channel_id=video_info.get("channel_id", ""),
-                view_count=video_info.get("view_count", 0),
-                like_count=video_info.get("like_count"),
-                comment_count=video_info.get("comment_count"),
-                tags=video_info.get("tags", []),
-                categories=video_info.get("categories", []),
-                publish_date=upload_date,
-                resolution=video_info.get("resolution", "unknown"),
-                fps=video_info.get("fps", 30.0),
-                audio_codec=video_info.get("acodec", "unknown"),
-                video_codec=video_info.get("vcodec", "unknown"),
-            )
+        metadata = VideoMetadata(
+            video_id=video_info.get("id") or "",
+            title=video_info.get("title") or "",
+            description=video_info.get("description") or "",
+            duration_seconds=video_info.get("duration"),
+            channel_title=video_info.get("uploader"),
+            channel_id=video_info.get("channel_id"),
+            view_count=video_info.get("view_count"),
+            like_count=video_info.get("like_count"),
+            comment_count=video_info.get("comment_count"),
+            tags=video_info.get("tags") or [],
+            categories=video_info.get("categories") or [],
+            publish_date=upload_date,
+            resolution=video_info.get("resolution"),
+            fps=video_info.get("fps"),
+            audio_codec=video_info.get("acodec"),
+            video_codec=video_info.get("vcodec"),
+        )
 
-            # Validate metadata against schema
-            validation_errors = validate_video_metadata(metadata)
-            if validation_errors:
-                raise ValueError(f"Metadata validation failed: {validation_errors}")
-
-            return metadata
-
-        except Exception as e:
-            LOGGER.warning("Failed to create validated metadata: %s", e)
-            # Return minimal valid metadata as fallback
-            return VideoMetadata(
-                video_id=video_info.get("id", "unknown"),
-                title=video_info.get("title", "Unknown"),
-                description="",
-                duration_seconds=0,
-                channel_title="Unknown",
-                channel_id="unknown",
-                view_count=0,
-                publish_date=datetime.now(),
-                resolution="unknown",
-                fps=30.0,
-                audio_codec="unknown",
-                video_codec="unknown",
-            )
+        validation = validate_video_metadata(metadata)
+        if validation["status"] == "invalid":
+            raise ValueError(f"Metadata validation failed: {validation['issues']}")
+        return metadata
 
 
 # Convenience functions

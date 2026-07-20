@@ -6,13 +6,13 @@ properties (micro-batch size, gradient accumulation, AMP usage), and exposes
 utility methods to export the adapted weights to ONNX and TensorRT formats.
 
 The implementation is defensive: when Ultralytics or TensorRT are unavailable,
-helpers fall back to lightweight stubs, allowing unit tests to execute without
-GPU dependencies while still producing artefacts on disk.
+helpers fail closed when a real exporter is unavailable so a placeholder can
+never be mistaken for a deployable model artefact.
 """
 
 from __future__ import annotations
 
-import json
+import importlib
 import logging
 import math
 from collections.abc import Iterator, Sequence
@@ -26,9 +26,9 @@ from torch import Tensor, nn
 LOGGER = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency, handled gracefully
-    from ultralytics import YOLO
+    YOLO: Any = importlib.import_module("ultralytics").YOLO
 except ImportError:  # pragma: no cover
-    YOLO = None  # type: ignore[assignment]
+    YOLO = None
 
 
 def _resolve_device(device: str) -> str:
@@ -56,14 +56,16 @@ class _LoRAWrapper(nn.Module):
         for param in self.base.parameters():
             param.requires_grad_(False)
 
+        self.lora_a: nn.Linear | nn.Conv2d
+        self.lora_b: nn.Linear | nn.Conv2d
         if isinstance(module, nn.Linear):
-            in_features = module.in_features  # type: ignore[attr-defined]
-            out_features = module.out_features  # type: ignore[attr-defined]
+            in_features = module.in_features
+            out_features = module.out_features
             self.lora_a = nn.Linear(in_features, rank, bias=False)
             self.lora_b = nn.Linear(rank, out_features, bias=False)
         elif isinstance(module, nn.Conv2d):
-            in_channels = module.in_channels  # type: ignore[attr-defined]
-            out_channels = module.out_channels  # type: ignore[attr-defined]
+            in_channels = module.in_channels
+            out_channels = module.out_channels
             self.lora_a = nn.Conv2d(in_channels, rank, kernel_size=1, bias=False)
             self.lora_b = nn.Conv2d(rank, out_channels, kernel_size=1, bias=False)
         else:  # pragma: no cover - guard for unsupported modules
@@ -114,13 +116,6 @@ class YOLOLoRAAdapter(nn.Module):
         self.model = model
 
         self._model: Any | None = model
-        self._lora_layers = nn.ModuleList()
-        self._lora_injected = False
-
-    def __post_init__(self) -> None:
-        super().__init__()
-        self.device = _resolve_device(self.device)
-        self._model: Any | None = self.model
         self._lora_layers = nn.ModuleList()
         self._lora_injected = False
 
@@ -181,7 +176,7 @@ class YOLOLoRAAdapter(nn.Module):
         self.mixed_precision_enabled = bool(enabled)
 
     # ------------------------------------------------------------------ workflow
-    def forward(self, inputs: Tensor, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+    def forward(self, inputs: Tensor, *args: Any, **kwargs: Any) -> Any:
         model = self._ensure_model()
         backbone = getattr(model, "model", None)
         if callable(backbone):
@@ -219,23 +214,23 @@ class YOLOLoRAAdapter(nn.Module):
         stem = filename or f"{Path(self.weights).stem}_lora.onnx"
         target = export_root / stem
 
-        if hasattr(model, "export"):
-            try:
-                exported = model.export(  # type: ignore[call-arg]
-                    format="onnx",
-                    path=target.as_posix(),
-                    opset=opset,
-                    half=self.mixed_precision,
-                    dynamic=dynamic,
-                )
-                exported_path = Path(exported) if exported else target
-                if exported_path.exists():
-                    return exported_path
-            except Exception as exc:  # pragma: no cover - export errors handled by stub
-                LOGGER.warning("Falling back to stub ONNX export: %s", exc)
-
-        _write_stub_file(target, {"format": "onnx", "weights": self.weights})
-        return target
+        exporter = getattr(model, "export", None)
+        if not callable(exporter):
+            raise RuntimeError("Underlying YOLO model does not support ONNX export")
+        try:
+            exported = exporter(
+                format="onnx",
+                path=target.as_posix(),
+                opset=opset,
+                half=self.mixed_precision,
+                dynamic=dynamic,
+            )
+        except Exception as exc:
+            raise RuntimeError("ONNX export failed") from exc
+        exported_path = Path(exported) if exported else target
+        if not exported_path.is_file() or exported_path.stat().st_size == 0:
+            raise RuntimeError("ONNX exporter did not produce a non-empty artefact")
+        return exported_path
 
     def export_to_tensorrt(
         self,
@@ -250,54 +245,41 @@ class YOLOLoRAAdapter(nn.Module):
         stem = filename or f"{Path(self.weights).stem}_lora_fp16.engine"
         target = export_root / stem
 
-        if hasattr(model, "export"):
-            try:
-                exported = model.export(  # type: ignore[call-arg]
-                    format="engine",
-                    path=target.as_posix(),
-                    half=self.mixed_precision,
-                    workspace=workspace_size,
-                    device=self.device,
-                )
-                exported_path = Path(exported) if exported else target
-                if exported_path.exists():
-                    _write_stub_file(
-                        exported_path,
-                        {"format": "tensorrt", "workspace": workspace_size},
-                        append=True,
-                    )
-                    return exported_path
-            except Exception as exc:  # pragma: no cover - export errors handled by stub
-                LOGGER.warning("TensorRT export unavailable: %s", exc)
-
-        _write_stub_file(target, {"format": "tensorrt", "workspace": workspace_size})
-        return target
+        exporter = getattr(model, "export", None)
+        if not callable(exporter):
+            raise RuntimeError("Underlying YOLO model does not support TensorRT export")
+        try:
+            exported = exporter(
+                format="engine",
+                path=target.as_posix(),
+                half=self.mixed_precision,
+                workspace=workspace_size,
+                device=self.device,
+            )
+        except Exception as exc:
+            raise RuntimeError("TensorRT export failed") from exc
+        exported_path = Path(exported) if exported else target
+        if not exported_path.is_file() or exported_path.stat().st_size == 0:
+            raise RuntimeError("TensorRT exporter did not produce a non-empty artefact")
+        return exported_path
 
     # -------------------------------------------------------------------- helpers
-    def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]:  # type: ignore[override]
+    def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]:
         self._ensure_model()
         for module in self._lora_layers:
             yield from module.parameters(recurse=recurse)
 
-    def train(self, mode: bool = True) -> YOLOLoRAAdapter:  # type: ignore[override]
+    def train(self, mode: bool = True) -> YOLOLoRAAdapter:
         model = self._ensure_model()
         if hasattr(model, "train"):
             model.train(mode)
         return super().train(mode)
 
-    def eval(self) -> YOLOLoRAAdapter:  # type: ignore[override]
+    def eval(self) -> YOLOLoRAAdapter:
         model = self._ensure_model()
         if hasattr(model, "eval"):
             model.eval()
         return super().eval()
-
-
-def _write_stub_file(path: Path, metadata: dict[str, Any], append: bool = False) -> None:
-    mode = "a" if append else "w"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open(mode, encoding="utf-8") as handle:
-        json.dump(metadata, handle)
-        handle.write("\n")
 
 
 def _normalise_loss(output: Any) -> dict[str, float]:

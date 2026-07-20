@@ -14,6 +14,7 @@ Ported from jhsoccer project with adaptations for fifa-soccer-ds integration.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -37,6 +38,17 @@ class PlayerState:
     position: np.ndarray  # (x, y) in meters or normalized coordinates
     velocity: np.ndarray | None = None  # (vx, vy) in m/s
 
+    def __post_init__(self) -> None:
+        position = np.asarray(self.position, dtype=np.float64)
+        if position.shape != (2,) or not np.all(np.isfinite(position)):
+            raise ValueError("position must contain two finite coordinates")
+        if self.velocity is not None:
+            velocity = np.asarray(self.velocity, dtype=np.float64)
+            if velocity.shape != (2,) or not np.all(np.isfinite(velocity)):
+                raise ValueError("velocity must contain two finite components")
+        if self.player_id < 0 or self.team_id not in {-1, 0, 1}:
+            raise ValueError("player_id must be non-negative and team_id one of -1, 0, 1")
+
 
 @dataclass(slots=True)
 class PitchControlResult:
@@ -59,6 +71,19 @@ class PitchControlConfig:
     pitch_width: float = PITCH_WIDTH
     time_horizon: float = 5.0  # seconds - max time to consider for interception
 
+    def __post_init__(self) -> None:
+        positive = {
+            "max_speed": self.max_speed,
+            "sigma": self.sigma,
+            "pitch_length": self.pitch_length,
+            "pitch_width": self.pitch_width,
+            "time_horizon": self.time_horizon,
+        }
+        if any(not math.isfinite(value) or value <= 0 for value in positive.values()):
+            raise ValueError(f"{', '.join(positive)} must be positive finite values")
+        if not math.isfinite(self.reaction_time) or self.reaction_time < 0:
+            raise ValueError("reaction_time must be a non-negative finite value")
+
 
 class PitchControlModel:
     """Physics-based pitch control model using time-to-intercept.
@@ -75,6 +100,8 @@ class PitchControlModel:
     def __init__(
         self, grid_shape: tuple[int, int] = (12, 16), config: PitchControlConfig | None = None
     ) -> None:
+        if len(grid_shape) != 2 or any(size < 2 or size > 512 for size in grid_shape):
+            raise ValueError("grid_shape dimensions must each be between 2 and 512")
         self.grid_shape = grid_shape
         self.config = config or PitchControlConfig()
 
@@ -92,32 +119,20 @@ class PitchControlModel:
 
         Args:
             frame_id: Frame identifier.
-            players: List of player states. If None, returns uniform control.
+            players: Player states containing observations for both teams.
 
         Returns:
             PitchControlResult with control probability grid.
         """
-        if players is None or len(players) == 0:
-            # No players - return neutral control (0.5 everywhere)
-            grid = np.full(self.grid_shape, 0.5, dtype=np.float32)
-            LOGGER.debug("No players provided for frame %s, returning neutral", frame_id)
-            return PitchControlResult(frame_id, grid, 50.0, 50.0)
+        if not players:
+            raise ValueError("Pitch control requires observed players from both teams")
 
         # Separate players by team
         home_players = [p for p in players if p.team_id == 0]
         away_players = [p for p in players if p.team_id == 1]
 
         if not home_players or not away_players:
-            # Only one team - that team controls everything
-            if home_players:
-                grid = np.ones(self.grid_shape, dtype=np.float32)
-                return PitchControlResult(frame_id, grid, 100.0, 0.0)
-            elif away_players:
-                grid = np.zeros(self.grid_shape, dtype=np.float32)
-                return PitchControlResult(frame_id, grid, 0.0, 100.0)
-            else:
-                grid = np.full(self.grid_shape, 0.5, dtype=np.float32)
-                return PitchControlResult(frame_id, grid, 50.0, 50.0)
+            raise ValueError("Pitch control requires observed players from both teams")
 
         # Compute control probability for each grid cell
         grid = self._compute_control_grid(home_players, away_players)
@@ -190,6 +205,8 @@ class PitchControlModel:
         if np.max(pos) > 1.0:
             # Assume position is in meters, normalize
             pos = pos / np.array([self.config.pitch_length, self.config.pitch_width])
+        if np.any(pos < 0) or np.any(pos > 1):
+            raise ValueError("player position is outside the configured pitch")
 
         # Compute distance from player to each grid point
         # grid_coords is shape (grid_y, grid_x, 2)

@@ -7,29 +7,20 @@ whether YouTube content is soccer-related.
 from __future__ import annotations
 
 import logging
+import math
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import cv2
+import numpy as np
+from PIL import Image
 
 from src.schemas import validate_youtube_url
 from src.youtube.audio_extractor import AudioExtractor
 from src.youtube.metadata_parser import YouTubeMetadataParser
 from src.youtube.video_downloader import YouTubeDownloader, extract_youtube_thumbnail
-
-try:
-    from PIL import Image
-except ImportError:
-    Image = None
-
-try:
-    import numpy as np
-except ImportError:
-    np = None
-
-try:
-    import cv2
-except ImportError:
-    cv2 = None
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,11 +34,12 @@ class SoccerClassifier:
         Args:
             confidence_threshold: Threshold for soccer classification (0-1)
         """
+        if not math.isfinite(confidence_threshold) or not 0 <= confidence_threshold <= 1:
+            raise ValueError("confidence_threshold must be finite and within [0, 1]")
         self.confidence_threshold = confidence_threshold
 
         # Initialize components
-        self.video_downloader = YouTubeDownloader()
-        self.audio_extractor = AudioExtractor()
+        self.audio_extractor: AudioExtractor | None = None
         self.metadata_parser = YouTubeMetadataParser()
 
         # Soccer visual indicators (for thumbnail analysis)
@@ -61,13 +53,19 @@ class SoccerClassifier:
         LOGGER.info("Soccer classifier initialized with threshold: %.2f", confidence_threshold)
 
     def classify_youtube_content(
-        self, youtube_url: str, sample_duration: float = 60.0
+        self,
+        youtube_url: str,
+        sample_duration: float = 60.0,
+        include_audio: bool = False,
+        max_video_duration: int | None = None,
     ) -> dict[str, Any]:
         """Classify YouTube content using multi-modal analysis.
 
         Args:
             youtube_url: YouTube video URL
             sample_duration: Duration of audio/video sample to analyze
+            include_audio: Whether to download and analyze an audio sample
+            max_video_duration: Reject longer or duration-unknown audio downloads
 
         Returns:
             Dict containing classification results and scores
@@ -76,8 +74,10 @@ class SoccerClassifier:
         if not validate_youtube_url(youtube_url):
             raise ValueError(f"Invalid YouTube URL format: {youtube_url}")
 
-        if sample_duration <= 0 or sample_duration > 300:
+        if not math.isfinite(sample_duration) or sample_duration <= 0 or sample_duration > 300:
             raise ValueError("Sample duration must be between 0 and 300 seconds")
+        if max_video_duration is not None and max_video_duration <= 0:
+            raise ValueError("max_video_duration must be positive")
 
         LOGGER.info("Classifying YouTube content: %s", youtube_url)
 
@@ -91,8 +91,10 @@ class SoccerClassifier:
 
             # 3. Audio Analysis (if video is long enough)
             audio_result = None
-            if sample_duration > 0:
-                audio_result = self._analyze_audio_sample(youtube_url, sample_duration)
+            if include_audio:
+                audio_result = self._analyze_audio_sample(
+                    youtube_url, sample_duration, max_video_duration=max_video_duration
+                )
 
             # 4. Combine Results
             final_result = self._combine_classifications(
@@ -100,6 +102,10 @@ class SoccerClassifier:
             )
 
             # 5. Add detailed breakdown
+            publish_date = metadata_result.get("publish_date")
+            if isinstance(publish_date, datetime):
+                publish_date = publish_date.isoformat()
+
             result = {
                 "youtube_url": youtube_url,
                 "is_soccer": final_result["is_soccer"],
@@ -125,9 +131,22 @@ class SoccerClassifier:
                     "sample_duration": sample_duration,
                     "timestamp": metadata_result.get("extraction_timestamp"),
                     "video_info": {
+                        "id": metadata_result.get("video_id"),
                         "title": metadata_result.get("title"),
-                        "duration": metadata_result.get("duration"),
-                        "uploader": metadata_result.get("uploader"),
+                        "description": metadata_result.get("description", ""),
+                        "duration": metadata_result.get("duration_seconds"),
+                        "uploader": metadata_result.get("channel_title"),
+                        "channel_id": metadata_result.get("channel_id"),
+                        "view_count": metadata_result.get("view_count"),
+                        "like_count": metadata_result.get("like_count"),
+                        "comment_count": metadata_result.get("comment_count"),
+                        "tags": metadata_result.get("tags", []),
+                        "categories": metadata_result.get("categories", []),
+                        "upload_date": publish_date,
+                        "resolution": metadata_result.get("resolution"),
+                        "fps": metadata_result.get("fps"),
+                        "acodec": metadata_result.get("audio_codec"),
+                        "vcodec": metadata_result.get("video_codec"),
                     },
                 },
             }
@@ -161,19 +180,18 @@ class SoccerClassifier:
             try:
                 extract_youtube_thumbnail(youtube_url, thumbnail_path)
 
-                if Image is None:
-                    raise ImportError("PIL is required for thumbnail analysis")
-
                 # Load and analyze thumbnail
-                image = Image.open(thumbnail_path)
-                image_array = np.array(image)
+                with Image.open(thumbnail_path) as source_image:
+                    image = source_image.convert("RGB")
+                    image_size = image.size
+                    image_array = np.asarray(image)
 
                 # Basic image analysis
                 analysis = self._analyze_image_for_soccer(image_array)
 
                 return {
-                    "thumbnail_path": str(thumbnail_path),
-                    "image_size": image.size,
+                    "thumbnail_path": None,
+                    "image_size": image_size,
                     "visual_score": analysis["visual_score"],
                     "soccer_elements": analysis["soccer_elements"],
                     "confidence": analysis["confidence"],
@@ -204,21 +222,25 @@ class SoccerClassifier:
         Returns:
             Dict containing visual analysis results
         """
-        if cv2 is None:
-            # Fallback analysis without OpenCV
-            return self._basic_image_analysis(image_array)
-
         try:
             # Convert to different color spaces for analysis
             hsv = cv2.cvtColor(image_array, cv2.COLOR_RGB2HSV)
             gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
 
             # Detect green areas (grass field)
-            green_mask = cv2.inRange(hsv, (40, 40, 40), (80, 255, 255))
+            green_mask = cv2.inRange(
+                hsv,
+                np.array((40, 40, 40), dtype=np.uint8),
+                np.array((80, 255, 255), dtype=np.uint8),
+            )
             green_ratio = np.sum(green_mask > 0) / green_mask.size
 
             # Detect white lines (field markings)
-            white_mask = cv2.inRange(hsv, (0, 0, 200), (180, 30, 255))
+            white_mask = cv2.inRange(
+                hsv,
+                np.array((0, 0, 200), dtype=np.uint8),
+                np.array((180, 30, 255), dtype=np.uint8),
+            )
             white_ratio = np.sum(white_mask > 0) / white_mask.size
 
             # Detect circles (potential soccer balls)
@@ -341,7 +363,13 @@ class SoccerClassifier:
                 "error": str(e),
             }
 
-    def _analyze_audio_sample(self, youtube_url: str, duration: float) -> dict[str, Any]:
+    def _analyze_audio_sample(
+        self,
+        youtube_url: str,
+        duration: float,
+        *,
+        max_video_duration: int | None = None,
+    ) -> dict[str, Any]:
         """Analyze audio sample for soccer content.
 
         Args:
@@ -352,23 +380,20 @@ class SoccerClassifier:
             Dict containing audio analysis results
         """
         try:
-            # Download video for audio extraction
-            video_info = self.video_downloader.download_video(youtube_url)
-            video_path = Path(video_info["video_path"])
+            with tempfile.TemporaryDirectory(prefix="fifa_audio_sample_") as cache_dir:
+                downloader = YouTubeDownloader(cache_dir=Path(cache_dir))
+                video_info = downloader.download_video(youtube_url, max_duration=max_video_duration)
+                video_path = Path(video_info["video_path"])
 
-            try:
                 # Process audio sample
+                if self.audio_extractor is None:
+                    self.audio_extractor = AudioExtractor()
                 audio_result = self.audio_extractor.process_sample_audio(video_path, duration)
 
                 return {
                     "audio_analysis": audio_result,
                     "classification": audio_result.get("classification", {}),
                 }
-
-            finally:
-                # Clean up downloaded video
-                if video_path.exists():
-                    video_path.unlink()
 
         except Exception as e:
             LOGGER.warning("Audio analysis failed: %s", e)
@@ -400,24 +425,30 @@ class SoccerClassifier:
         # Extract individual scores
         metadata_score = metadata_result.get("confidence", 0)
         visual_score = thumbnail_result.get("visual_score", 0)
-        audio_score = 0
+        audio_score = 0.0
 
         if audio_result and "classification" in audio_result:
             audio_score = audio_result["classification"].get("confidence", 0)
 
-        # Weight the scores (metadata is most reliable for YouTube)
-        weights = {
+        # Base weights; unavailable modalities are excluded and the remainder
+        # is normalized so opting out of audio does not lower confidence.
+        base_weights = {
             "metadata": 0.5,  # 50% weight
             "visual": 0.3,  # 30% weight
             "audio": 0.2,  # 20% weight
         }
+        available = {"metadata": metadata_score}
+        if "error" not in thumbnail_result:
+            available["visual"] = visual_score
+        audio_classification = audio_result.get("classification", {}) if audio_result else {}
+        if audio_result and "error" not in audio_classification:
+            available["audio"] = audio_score
+
+        available_weight = sum(base_weights[name] for name in available)
+        weights = {name: base_weights[name] / available_weight for name in available}
 
         # Calculate weighted confidence
-        combined_confidence = (
-            metadata_score * weights["metadata"]
-            + visual_score * weights["visual"]
-            + audio_score * weights["audio"]
-        )
+        combined_confidence = sum(score * weights[name] for name, score in available.items())
 
         # Final classification
         is_soccer = combined_confidence >= self.confidence_threshold

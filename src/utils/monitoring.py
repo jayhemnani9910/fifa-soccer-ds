@@ -9,45 +9,74 @@ This module provides:
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import time
 from collections.abc import Callable
 from functools import wraps
+from typing import Any
 
 try:
-    import torch
+    torch: Any = importlib.import_module("torch")
 except ImportError:
     torch = None
 
 try:
-    import psutil
+    psutil: Any = importlib.import_module("psutil")
 except ImportError:
     psutil = None
 
 try:
-    from prometheus_client import Counter, Gauge, Histogram, start_http_server
+    prometheus: Any = importlib.import_module("prometheus_client")
 except ImportError:
-    Counter = Gauge = Histogram = start_http_server = None
+    prometheus = None
 
 LOGGER = logging.getLogger(__name__)
 
-# Prometheus metrics
-if Counter and Gauge and Histogram:
+
+class _NoopMetric:
+    """Metric-compatible sink used when Prometheus is not installed."""
+
+    def inc(self, amount: float = 1.0) -> None:
+        del amount
+
+    def set(self, value: float) -> None:
+        del value
+
+    def observe(self, value: float) -> None:
+        del value
+
+
+# Prometheus metrics. These names always exist so optional observability can
+# never prevent the core pipeline from importing.
+if prometheus is not None:
     # Counters
-    FRAMES_PROCESSED = Counter("fifa_frames_processed_total", "Total frames processed")
-    DETECTIONS_MADE = Counter("fifa_detections_total", "Total detections made")
-    TRACKS_CREATED = Counter("fifa_tracks_created_total", "Total tracks created")
+    FRAMES_PROCESSED = prometheus.Counter("fifa_frames_processed_total", "Total frames processed")
+    DETECTIONS_MADE = prometheus.Counter("fifa_detections_total", "Total detections made")
+    TRACKS_CREATED = prometheus.Counter("fifa_tracks_created_total", "Total tracks created")
 
     # Gauges
-    ACTIVE_TRACKS = Gauge("fifa_active_tracks", "Number of currently active tracks")
-    GPU_MEMORY_USED = Gauge("fifa_gpu_memory_bytes", "GPU memory usage in bytes")
-    CPU_USAGE = Gauge("fifa_cpu_usage_percent", "CPU usage percentage")
+    ACTIVE_TRACKS = prometheus.Gauge("fifa_active_tracks", "Number of currently active tracks")
+    GPU_MEMORY_USED = prometheus.Gauge("fifa_gpu_memory_bytes", "GPU memory usage in bytes")
+    CPU_USAGE = prometheus.Gauge("fifa_cpu_usage_percent", "CPU usage percentage")
 
     # Histograms
-    PROCESSING_TIME = Histogram("fifa_frame_processing_seconds", "Time spent processing each frame")
-    DETECTION_TIME = Histogram("fifa_detection_seconds", "Time spent on detection")
-    TRACKING_TIME = Histogram("fifa_tracking_seconds", "Time spent on tracking")
+    PROCESSING_TIME = prometheus.Histogram(
+        "fifa_frame_processing_seconds", "Time spent processing each frame"
+    )
+    DETECTION_TIME = prometheus.Histogram("fifa_detection_seconds", "Time spent on detection")
+    TRACKING_TIME = prometheus.Histogram("fifa_tracking_seconds", "Time spent on tracking")
+else:
+    FRAMES_PROCESSED = _NoopMetric()
+    DETECTIONS_MADE = _NoopMetric()
+    TRACKS_CREATED = _NoopMetric()
+    ACTIVE_TRACKS = _NoopMetric()
+    GPU_MEMORY_USED = _NoopMetric()
+    CPU_USAGE = _NoopMetric()
+    PROCESSING_TIME = _NoopMetric()
+    DETECTION_TIME = _NoopMetric()
+    TRACKING_TIME = _NoopMetric()
 
 
 class JSONFormatter(logging.Formatter):
@@ -137,31 +166,29 @@ def get_gpu_memory_usage() -> int:
 
 def update_system_metrics() -> None:
     """Update system-level metrics."""
-    if GPU_MEMORY_USED:
-        GPU_MEMORY_USED.set(get_gpu_memory())
-
-    if CPU_USAGE:
-        CPU_USAGE.set(get_cpu_usage())
+    GPU_MEMORY_USED.set(get_gpu_memory())
+    CPU_USAGE.set(get_cpu_usage())
 
 
-def timed(metric_histogram: Histogram | None = None):
+def timed(metric_histogram: Any | None = None):
     """Decorator to time function execution and record to Prometheus."""
 
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
-            start_time = time.time()
+            start_time = time.perf_counter()
             try:
                 result = func(*args, **kwargs)
                 return result
             finally:
-                duration = time.time() - start_time
+                duration = time.perf_counter() - start_time
                 if metric_histogram:
                     metric_histogram.observe(duration)
 
                 # Log timing with structured logging
                 LOGGER.info(
-                    f"Function {func.__name__} completed",
+                    "Function %s completed",
+                    func.__name__,
                     extra={
                         "func_name": func.__name__,
                         "duration": duration,
@@ -176,17 +203,14 @@ def timed(metric_histogram: Histogram | None = None):
 
 def start_metrics_server(port: int = 8000) -> None:
     """Start Prometheus metrics HTTP server."""
-    if start_http_server:
-        LOGGER.info(f"Starting Prometheus metrics server on port {port}")
-        start_http_server(port)
+    if prometheus is not None:
+        LOGGER.info("Starting Prometheus metrics server on port %d", port)
+        prometheus.start_http_server(port)
     else:
         LOGGER.warning("prometheus_client not available, metrics server not started")
 
 
-# Convenience decorators (only available when prometheus_client is installed)
-if Counter and Gauge and Histogram:
-    timed_processing = timed(PROCESSING_TIME)
-    timed_detection = timed(DETECTION_TIME)
-    timed_tracking = timed(TRACKING_TIME)
-else:
-    timed_processing = timed_detection = timed_tracking = None
+# Convenience decorators remain functional even when metrics are disabled.
+timed_processing = timed(PROCESSING_TIME)
+timed_detection = timed(DETECTION_TIME)
+timed_tracking = timed(TRACKING_TIME)

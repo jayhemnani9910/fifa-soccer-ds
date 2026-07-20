@@ -6,25 +6,26 @@ for soccer content classification using speech recognition and audio analysis.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import tempfile
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 try:
-    import whisper
+    whisper: Any | None = importlib.import_module("whisper")
 except ImportError:
     whisper = None
 
 try:
-    import librosa
-    import numpy as np
+    librosa: Any | None = importlib.import_module("librosa")
 except ImportError:
     librosa = None
-    np = None
 
 try:
-    import ffmpeg
+    ffmpeg: Any | None = importlib.import_module("ffmpeg")
 except ImportError:
     ffmpeg = None
 
@@ -51,15 +52,18 @@ class AudioExtractor:
         if ffmpeg is None:
             raise ImportError("ffmpeg is required. Install ffmpeg system package")
 
+        self._whisper: Any = whisper
+        self._librosa: Any = librosa
+        self._ffmpeg: Any = ffmpeg
         self.model_size = model_size
-        self.model = None
+        self.model: Any = None
         self._load_model()
 
     def _load_model(self) -> None:
         """Load the Whisper model."""
         try:
             LOGGER.info("Loading Whisper model: %s", self.model_size)
-            self.model = whisper.load_model(self.model_size)
+            self.model = self._whisper.load_model(self.model_size)
             LOGGER.info("Whisper model loaded successfully")
         except Exception as e:
             LOGGER.error("Failed to load Whisper model: %s", e)
@@ -86,7 +90,7 @@ class AudioExtractor:
 
             # Extract audio using ffmpeg
             (
-                ffmpeg.input(str(video_path))
+                self._ffmpeg.input(str(video_path))
                 .output(str(output_path), acodec="pcm_s16le", ac=1, ar=16000)
                 .overwrite_output()
                 .run(quiet=True)
@@ -168,31 +172,36 @@ class AudioExtractor:
             LOGGER.info("Analyzing audio features: %s", audio_path)
 
             # Load audio
-            y, sr = librosa.load(str(audio_path), sr=16000)
+            y, sr = self._librosa.load(str(audio_path), sr=16000)
 
-            features = {
+            features: dict[str, Any] = {
                 "duration": len(y) / sr,
                 "sample_rate": sr,
                 "energy": float(np.mean(y**2)),
-                "zero_crossing_rate": float(np.mean(librosa.feature.zero_crossing_rate(y))),
-                "spectral_centroid": float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))),
-                "spectral_rolloff": float(np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr))),
+                "zero_crossing_rate": float(np.mean(self._librosa.feature.zero_crossing_rate(y))),
+                "spectral_centroid": float(
+                    np.mean(self._librosa.feature.spectral_centroid(y=y, sr=sr))
+                ),
+                "spectral_rolloff": float(
+                    np.mean(self._librosa.feature.spectral_rolloff(y=y, sr=sr))
+                ),
                 "mfcc": [],
                 "chroma": [],
                 "tempo": 0.0,
             }
 
             # Extract MFCC features
-            mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+            mfcc = self._librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
             features["mfcc"] = [float(x) for x in np.mean(mfcc, axis=1)]
 
             # Extract chroma features
-            chroma = librosa.feature.chroma_stft(y=y, sr=sr)
+            chroma = self._librosa.feature.chroma_stft(y=y, sr=sr)
             features["chroma"] = [float(x) for x in np.mean(chroma, axis=1)]
 
             # Estimate tempo
-            tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-            features["tempo"] = float(tempo)
+            tempo, _ = self._librosa.beat.beat_track(y=y, sr=sr)
+            tempo_values = np.asarray(tempo).reshape(-1)
+            features["tempo"] = float(tempo_values[0]) if tempo_values.size else 0.0
 
             LOGGER.info(
                 "Audio analysis complete: %.1f seconds, %.1f BPM",
@@ -315,7 +324,7 @@ class AudioExtractor:
             try:
                 # Extract sample audio
                 (
-                    ffmpeg.input(str(video_path), ss=0, t=duration_seconds)
+                    self._ffmpeg.input(str(video_path), ss=0, t=duration_seconds)
                     .output(str(temp_audio_path), acodec="pcm_s16le", ac=1, ar=16000)
                     .overwrite_output()
                     .run(quiet=True)

@@ -1,9 +1,9 @@
 """Tactical Analysis Module.
 
-Provides unified interface for tactical soccer analysis including:
+Provides unified interface for experimental tactical soccer analysis including:
 - Pitch control computation
-- Expected threat (xT) analysis
-- Off-ball scoring opportunities (OBSO)
+- A static, heuristic attacking-value surface (xT-like)
+- Off-ball opportunity scores derived from those two surfaces
 """
 
 from __future__ import annotations
@@ -45,6 +45,10 @@ class TacticalConfig:
     time_horizon: float = 5.0  # seconds
     enable_xT: bool = True
     enable_obso: bool = True
+
+    def __post_init__(self) -> None:
+        if len(self.grid_shape) != 2 or any(size < 2 or size > 512 for size in self.grid_shape):
+            raise ValueError("grid_shape dimensions must each be between 2 and 512")
 
 
 @dataclass
@@ -88,12 +92,10 @@ class TacticalAnalyzer:
         LOGGER.info("Initialized TacticalAnalyzer with grid shape %s", self.config.grid_shape)
 
     def _create_default_xT_grid(self) -> np.ndarray:
-        """Create default Expected Threat (xT) grid.
+        """Create a static heuristic attacking-value grid.
 
-        Based on Karun Singh's xT model - values represent the probability
-        of scoring from each zone of the pitch.
-
-        The grid increases in value towards the opponent's goal.
+        This is not a learned or calibrated expected-threat model. It is a
+        deterministic spatial prior that increases toward the opponent's goal.
         """
         rows, cols = self.config.grid_shape
 
@@ -161,11 +163,11 @@ class TacticalAnalyzer:
     def _compute_obso(
         self, pitch_control_grid: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, float, float]:
-        """Compute Off-Ball Scoring Opportunities.
+        """Compute an experimental off-ball opportunity surface.
 
         OBSO = Pitch Control * xT
 
-        Represents the expected goal value of controlling each zone.
+        The result is not calibrated as an expected-goals probability.
         """
         # Home team OBSO (where they control AND can score)
         obso_home = pitch_control_grid * self.xT_grid
@@ -200,6 +202,9 @@ class TacticalAnalyzer:
         Returns:
             TacticalResult with all computed metrics.
         """
+        if image_shape is None or any(dimension <= 0 for dimension in image_shape):
+            raise ValueError("image_shape with positive height and width is required")
+
         players = []
 
         for track_data in tracklets_data:
@@ -219,18 +224,14 @@ class TacticalAnalyzer:
             pos_x = (x1 + x2) / 2
             pos_y = y2  # Foot position
 
-            # Normalize if image shape provided
-            if image_shape is not None:
-                height, width = image_shape
-                pos_x = pos_x / width
-                pos_y = pos_y / height
+            height, width = image_shape
+            pos_x = pos_x / width
+            pos_y = pos_y / height
 
             # Get team assignment
-            if team_assignments and track_id in team_assignments:
-                team_id = team_assignments[track_id]
-            else:
-                # Default: position-based (left = home)
-                team_id = 0 if pos_x < 0.5 else 1
+            if not team_assignments or team_assignments.get(track_id) not in {0, 1}:
+                continue
+            team_id = team_assignments[track_id]
 
             players.append(
                 PlayerState(

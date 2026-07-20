@@ -10,8 +10,64 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
+
+from src.utils.output_paths import validate_output_name
+
+_YOUTUBE_HOSTS = frozenset(
+    {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "music.youtube.com",
+        "youtu.be",
+        "youtube-nocookie.com",
+        "www.youtube-nocookie.com",
+    }
+)
+_YOUTUBE_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}\Z")
+
+
+def extract_youtube_video_id(url: str) -> str:
+    """Validate a YouTube video URL and return its canonical 11-character ID."""
+    try:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if (
+            parsed.scheme != "https"
+            or host not in _YOUTUBE_HOSTS
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in {None, 443}
+        ):
+            raise ValueError("URL must use HTTPS on an approved YouTube host")
+
+        if host == "youtu.be":
+            video_id = parsed.path.strip("/").split("/", 1)[0]
+        elif parsed.path == "/watch":
+            video_id = parse_qs(parsed.query).get("v", [""])[0]
+        else:
+            path_parts = [part for part in parsed.path.split("/") if part]
+            if len(path_parts) != 2 or path_parts[0] not in {"embed", "live", "shorts", "v"}:
+                raise ValueError("URL does not identify a single YouTube video")
+            video_id = path_parts[1]
+
+        if _YOUTUBE_VIDEO_ID.fullmatch(video_id) is None:
+            raise ValueError("YouTube video ID must contain exactly 11 safe characters")
+        return video_id
+    except ValueError as exc:
+        raise ValueError("Invalid YouTube video URL") from exc
+
+
+def validate_youtube_url(url: str) -> bool:
+    """Return whether *url* is an HTTPS URL for a single YouTube video."""
+    try:
+        extract_youtube_video_id(url)
+    except ValueError:
+        return False
+    return True
 
 
 class DetectionBox(BaseModel):
@@ -82,27 +138,36 @@ class VideoMetadata(BaseModel):
     video_id: str = Field(min_length=11, max_length=11, description="YouTube video ID")
     title: str = Field(min_length=1, max_length=200, description="Video title")
     description: str = Field(default="", description="Video description")
-    duration_seconds: int = Field(ge=1, le=28800, description="Video duration (max 8 hours)")
+    duration_seconds: int | None = Field(
+        default=None,
+        ge=0,
+        le=28800,
+        description="Video duration in seconds when supplied by upstream metadata",
+    )
 
     # Channel info
-    channel_title: str = Field(min_length=1, max_length=100, description="Channel name")
-    channel_id: str = Field(min_length=1, description="Channel identifier")
+    channel_title: str | None = Field(
+        default=None, min_length=1, max_length=100, description="Channel name"
+    )
+    channel_id: str | None = Field(default=None, min_length=1, description="Channel identifier")
 
     # Engagement metrics
-    view_count: int = Field(ge=0, description="View count")
+    view_count: int | None = Field(default=None, ge=0, description="View count when available")
     like_count: int | None = Field(default=None, ge=0, description="Like count")
     comment_count: int | None = Field(default=None, ge=0, description="Comment count")
 
     # Content info
     tags: list[str] = Field(default_factory=list, description="Video tags")
     categories: list[str] = Field(default_factory=list, description="Content categories")
-    publish_date: datetime = Field(description="Publication date")
+    publish_date: datetime | None = Field(
+        default=None, description="Publication date when supplied by upstream metadata"
+    )
 
     # Quality metrics
-    resolution: str = Field(description="Video resolution")
-    fps: float = Field(gt=0, le=120, description="Frames per second")
-    audio_codec: str = Field(description="Audio codec")
-    video_codec: str = Field(description="Video codec")
+    resolution: str | None = Field(default=None, description="Video resolution when available")
+    fps: float | None = Field(default=None, gt=0, le=120, description="Frames per second")
+    audio_codec: str | None = Field(default=None, description="Audio codec")
+    video_codec: str | None = Field(default=None, description="Video codec")
 
 
 class AudioTranscription(BaseModel):
@@ -136,7 +201,9 @@ class PlayerAnalysis(BaseModel):
     team_colors: list[str] = Field(default_factory=list, description="Detected team colors")
 
     # Performance metrics
-    avg_track_length: float = Field(ge=0, description="Average track duration")
+    avg_track_length: float | None = Field(
+        default=None, ge=0, description="Average track duration when measured"
+    )
     player_positions: dict[str, list[tuple]] = Field(
         default_factory=dict, description="Player position history"
     )
@@ -156,11 +223,17 @@ class SoccerClassification(BaseModel):
 
     # Event statistics
     events_detected: list[SoccerEvent] = Field(default_factory=list, description="Detected events")
-    total_events: int = Field(ge=0, description="Total number of events")
+    total_events: int | None = Field(
+        default=None, ge=0, description="Total number of events when event detection was run"
+    )
 
     # Quality metrics
-    detection_quality: float = Field(ge=0, le=1, description="Overall detection quality")
-    processing_success_rate: float = Field(ge=0, le=1, description="Successful processing rate")
+    detection_quality: float | None = Field(
+        default=None, ge=0, le=1, description="Overall detection quality when evaluated"
+    )
+    processing_success_rate: float | None = Field(
+        default=None, ge=0, le=1, description="Successful processing rate when measured"
+    )
 
 
 class PipelineOutput(BaseModel):
@@ -179,6 +252,9 @@ class PipelineOutput(BaseModel):
     # Analysis results
     soccer_classification: SoccerClassification = Field(description="Soccer content classification")
     player_analysis: PlayerAnalysis = Field(description="Player tracking results")
+    tactical_analytics: dict[str, Any] | None = Field(
+        default=None, description="Measured tactical aggregates when team classification succeeds"
+    )
     audio_analysis: AudioTranscription | None = Field(
         default=None, description="Audio transcription"
     )
@@ -203,7 +279,9 @@ class YouTubeAnalysisRequest(BaseModel):
     max_duration: int | None = Field(
         default=None, gt=0, le=7200, description="Max processing duration"
     )
-    include_audio: bool = Field(default=True, description="Include audio analysis")
+    include_audio: bool = Field(
+        default=False, description="Include optional Whisper/librosa audio analysis"
+    )
     confidence_threshold: float = Field(
         default=0.75, ge=0, le=1, description="Detection confidence threshold"
     )
@@ -214,15 +292,17 @@ class YouTubeAnalysisRequest(BaseModel):
     )
     sample_duration: float = Field(default=60.0, gt=0, le=300, description="Audio sample duration")
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: HttpUrl) -> HttpUrl:
+        if not validate_youtube_url(str(value)):
+            raise ValueError("url must identify a video on an approved HTTPS YouTube host")
+        return value
+
     @field_validator("output_dir")
     @classmethod
-    def validate_output_dir(cls, v):
-        if v is not None:
-            # Sanitize directory path
-            v = re.sub(r"[^\w\-_\.]", "_", v)
-            if len(v) > 100:
-                raise ValueError("Output directory name too long")
-        return v
+    def validate_output_dir(cls, value: str | None) -> str | None:
+        return validate_output_name(value) if value is not None else None
 
 
 class TaskStatus(BaseModel):
@@ -257,13 +337,6 @@ class PipelineConfig(BaseModel):
     validation: dict[str, Any] = Field(description="Validation settings")
 
 
-# Utility functions for schema validation
-def validate_youtube_url(url: str) -> bool:
-    """Validate YouTube URL format."""
-    youtube_pattern = r"^(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})"
-    return bool(re.match(youtube_pattern, url))
-
-
 def sanitize_filename(filename: str) -> str:
     """Sanitize filename to be safe for all filesystems."""
     # Remove or replace unsafe characters
@@ -279,10 +352,10 @@ def sanitize_filename(filename: str) -> str:
 
 def validate_video_duration(duration_seconds: int, max_duration: int = 28800) -> bool:
     """Validate video duration is within acceptable limits."""
-    return 1 <= duration_seconds <= max_duration
+    return 0 <= duration_seconds <= max_duration
 
 
-def validate_video_codec(codec: str, supported_codecs: list[str] = None) -> bool:
+def validate_video_codec(codec: str, supported_codecs: list[str] | None = None) -> bool:
     """Validate video codec is supported.
 
     Args:
@@ -299,7 +372,7 @@ def validate_video_codec(codec: str, supported_codecs: list[str] = None) -> bool
     return any(supported in codec_lower for supported in supported_codecs)
 
 
-def validate_audio_codec(codec: str, supported_codecs: list[str] = None) -> bool:
+def validate_audio_codec(codec: str, supported_codecs: list[str] | None = None) -> bool:
     """Validate audio codec is supported.
 
     Args:
@@ -343,16 +416,16 @@ def validate_resolution(resolution: str, min_width: int = 320, min_height: int =
     """
     try:
         if "x" in resolution:
-            width, height = resolution.lower().split("x")
-            width = int(width)
-            height = int(height)
+            width_text, height_text = resolution.lower().split("x")
+            width = int(width_text)
+            height = int(height_text)
             return width >= min_width and height >= min_height
         return False
     except (ValueError, AttributeError):
         return False
 
 
-def validate_video_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+def validate_video_metadata(metadata: BaseModel | dict[str, Any]) -> dict[str, Any]:
     """Comprehensive video metadata validation.
 
     Args:
@@ -361,38 +434,42 @@ def validate_video_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Dictionary with validation results and issues
     """
+    values = metadata.model_dump() if isinstance(metadata, BaseModel) else metadata
     issues = []
     warnings = []
 
     # Validate duration
-    duration = metadata.get("duration_seconds", 0)
-    if not validate_video_duration(duration):
+    duration = values.get("duration_seconds")
+    duration_valid = duration is None or validate_video_duration(duration)
+    if not duration_valid:
         issues.append(f"Invalid duration: {duration} seconds")
+    elif duration is None:
+        warnings.append("Video duration is unavailable")
 
     # Validate video codec
-    video_codec = metadata.get("video_codec", "")
+    video_codec = values.get("video_codec", "")
     if video_codec and not validate_video_codec(video_codec):
         warnings.append(f"Potentially unsupported video codec: {video_codec}")
 
     # Validate audio codec
-    audio_codec = metadata.get("audio_codec", "")
+    audio_codec = values.get("audio_codec", "")
     if audio_codec and not validate_audio_codec(audio_codec):
         warnings.append(f"Potentially unsupported audio codec: {audio_codec}")
 
     # Validate FPS
-    fps = metadata.get("fps", 0)
+    fps = values.get("fps", 0)
     if fps and not validate_fps(fps):
         issues.append(f"Invalid FPS: {fps}")
 
     # Validate resolution
-    resolution = metadata.get("resolution", "")
+    resolution = values.get("resolution", "")
     if resolution and not validate_resolution(resolution):
         warnings.append(f"Low resolution: {resolution}")
 
     # Check for missing critical fields
-    critical_fields = ["video_id", "title", "channel_title", "duration_seconds"]
+    critical_fields = ["video_id", "title"]
     for field in critical_fields:
-        if field not in metadata or not metadata[field]:
+        if field not in values or not values[field]:
             issues.append(f"Missing critical field: {field}")
 
     # Determine overall validation status
@@ -408,7 +485,7 @@ def validate_video_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "issues": issues,
         "warnings": warnings,
         "validation_details": {
-            "duration_valid": validate_video_duration(duration),
+            "duration_valid": duration_valid,
             "video_codec_supported": validate_video_codec(video_codec) if video_codec else True,
             "audio_codec_supported": validate_audio_codec(audio_codec) if audio_codec else True,
             "fps_valid": validate_fps(fps) if fps else True,
@@ -430,6 +507,7 @@ __all__ = [
     "YouTubeAnalysisRequest",
     "TaskStatus",
     "PipelineConfig",
+    "extract_youtube_video_id",
     "validate_youtube_url",
     "sanitize_filename",
     "validate_video_duration",

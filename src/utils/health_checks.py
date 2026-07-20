@@ -9,28 +9,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import logging
-import subprocess
+import shutil
+
+# Subprocesses use fixed argument vectors and resolved executables.
+import subprocess  # nosec B404
+import sys
 import time
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
-try:
-    import psutil
-except ImportError:
-    psutil = None
-
-try:
-    import aiohttp
-except ImportError:
-    aiohttp = None
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
+import aiohttp
+import psutil
+import yaml
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -43,14 +38,14 @@ class HealthChecker:
         """Initialize health checker with configuration."""
         self.config_path = Path(config_path)
         self.config = self._load_config()
-        self.start_time = datetime.now()
+        self.start_time = time.monotonic()
 
         # Health check results cache
-        self._health_cache = {}
+        self._health_cache: dict[str, Any] = {}
         self._cache_ttl = 30  # 30 seconds cache
 
         # Metrics tracking
-        self.metrics = {
+        self.metrics: dict[str, Any] = {
             "health_checks_total": 0,
             "health_checks_failed": 0,
             "component_health": {},
@@ -60,10 +55,12 @@ class HealthChecker:
     def _load_config(self) -> dict[str, Any]:
         """Load pipeline configuration."""
         try:
-            with open(self.config_path) as f:
-                return yaml.safe_load(f)
-        except Exception as e:
-            logger.error(f"Failed to load config: {e}")
+            raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+            if not isinstance(raw, Mapping):
+                raise ValueError("configuration root must be a mapping")
+            return dict(raw)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            logger.warning("Using default health-check config: %s", exc)
             return self._get_default_config()
 
     def _get_default_config(self) -> dict[str, Any]:
@@ -80,7 +77,7 @@ class HealthChecker:
         """Run health checks on all pipeline components."""
         logger.info("Starting comprehensive health check...")
 
-        health_results = {
+        health_results: dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
             "overall_status": "healthy",
             "components": {},
@@ -89,7 +86,7 @@ class HealthChecker:
         }
 
         # Check individual components
-        components = [
+        components: list[tuple[str, Callable[[], Awaitable[dict[str, Any]]]]] = [
             ("youtube_downloader", self._check_youtube_downloader),
             ("audio_processor", self._check_audio_processor),
             ("soccer_classifier", self._check_soccer_classifier),
@@ -145,11 +142,12 @@ class HealthChecker:
     async def _check_youtube_downloader(self) -> dict[str, Any]:
         """Check YouTube downloader component health."""
         try:
-            # Check if yt-dlp is available
-            import subprocess
-
-            result = subprocess.run(
-                ["yt-dlp", "--version"], capture_output=True, text=True, timeout=10
+            # The current interpreter and every argument are controlled here.
+            result = subprocess.run(  # nosec B603
+                [sys.executable, "-m", "yt_dlp", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
 
             if result.returncode == 0:
@@ -264,7 +262,13 @@ class HealthChecker:
         try:
             # Check if API server is responding
             api_config = self.config.get("api", {})
-            host = api_config.get("host", "0.0.0.0")
+            host = str(api_config.get("host", "127.0.0.1"))
+            unspecified_hosts = {
+                str(ipaddress.IPv4Address(0)),
+                str(ipaddress.IPv6Address(0)),
+            }
+            if host in unspecified_hosts:
+                host = "127.0.0.1"
             port = api_config.get("port", 8000)
 
             timeout = aiohttp.ClientTimeout(total=5)
@@ -362,18 +366,26 @@ class HealthChecker:
     async def _check_dependencies(self) -> dict[str, Any]:
         """Check system dependencies and requirements."""
         try:
-            dependencies = [
-                ("python", "python --version"),
-                ("ffmpeg", "ffmpeg -version"),
-                ("git", "git --version"),
+            dependencies: list[tuple[str, str | None, list[str]]] = [
+                ("python", sys.executable, ["--version"]),
+                ("ffmpeg", shutil.which("ffmpeg"), ["-version"]),
+                ("git", shutil.which("git"), ["--version"]),
             ]
 
             results = []
             missing_deps = []
 
-            for dep_name, cmd in dependencies:
+            for dep_name, executable, arguments in dependencies:
+                if executable is None:
+                    results.append(f"{dep_name}: missing")
+                    missing_deps.append(dep_name)
+                    continue
+                command = [executable, *arguments]
                 try:
-                    result = subprocess.run(cmd.split(), capture_output=True, text=True, timeout=10)
+                    # Executables are resolved above and each argument is constant.
+                    result = subprocess.run(  # nosec B603
+                        command, capture_output=True, text=True, timeout=10
+                    )
                     if result.returncode == 0:
                         results.append(f"{dep_name}: available")
                     else:
@@ -413,7 +425,7 @@ class HealthChecker:
                 "disk_usage_percent": psutil.disk_usage("/").percent,
                 "boot_time": datetime.fromtimestamp(psutil.boot_time()).isoformat(),
                 "process_count": len(psutil.pids()),
-                "uptime_seconds": (datetime.now() - self.start_time).total_seconds(),
+                "uptime_seconds": time.monotonic() - self.start_time,
             }
         except Exception as e:
             return {"error": str(e)}
@@ -439,24 +451,24 @@ class HealthChecker:
 
 
 # Health check decorator for automatic monitoring
-def health_check(func):
+def health_check[**P, T](func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
     """Decorator to automatically add health check monitoring to functions."""
 
     @wraps(func)
-    async def wrapper(*args, **kwargs):
-        start_time = time.time()
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        start_time = time.monotonic()
         try:
             result = await func(*args, **kwargs)
 
             # Log successful execution
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             logger.info(f"Function {func.__name__} completed successfully in {duration:.2f}s")
 
             return result
 
         except Exception as e:
             # Log failed execution
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             logger.error(f"Function {func.__name__} failed after {duration:.2f}s: {e}")
             raise
 
@@ -471,15 +483,15 @@ class BackgroundHealthMonitor:
         self.health_checker = health_checker
         self.interval = interval
         self.running = False
-        self.task = None
+        self.task: asyncio.Task[None] | None = None
 
-    async def start(self):
+    async def start(self) -> None:
         """Start background health monitoring."""
         self.running = True
         self.task = asyncio.create_task(self._monitor_loop())
         logger.info("Background health monitoring started")
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop background health monitoring."""
         self.running = False
         if self.task:
@@ -488,7 +500,7 @@ class BackgroundHealthMonitor:
                 await self.task
         logger.info("Background health monitoring stopped")
 
-    async def _monitor_loop(self):
+    async def _monitor_loop(self) -> None:
         """Background monitoring loop."""
         while self.running:
             try:

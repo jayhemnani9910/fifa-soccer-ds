@@ -2,26 +2,28 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Self
+
+if TYPE_CHECKING:
+    from mlflow.entities import Run
 
 try:
-    import mlflow
-    from mlflow.entities import Run
-    from mlflow.tracking import MlflowClient
+    mlflow: Any = importlib.import_module("mlflow")
 except ImportError:
     mlflow = None
-    Run = None
-    MlflowClient = None
 
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TRACKING_DIR = Path("mlruns")
+DEFAULT_TRACKING_URI = "sqlite:///mlflow.db"
 DEFAULT_EXPERIMENT_NAME = "fifa_soccer_ds"
 DEFAULT_ARTIFACT_PATH = "artifacts"
 
@@ -32,33 +34,30 @@ class MLflowConfig:
     def __init__(
         self,
         tracking_uri: str | None = None,
-        experiment_name: str = DEFAULT_EXPERIMENT_NAME,
+        experiment_name: str | None = None,
         artifact_location: str | None = None,
         default_tags: dict[str, str] | None = None,
     ):
-        self.tracking_uri = tracking_uri or os.getenv("MLFLOW_TRACKING_URI")
-        self.experiment_name = experiment_name
-        self.artifact_location = artifact_location
-        self.default_tags = default_tags or {}
-
-        # Auto-configure from environment
-        self._configure_from_env()
-
-    def _configure_from_env(self):
-        """Configure MLflow from environment variables."""
-        env_mappings = {
-            "MLFLOW_TRACKING_URI": "tracking_uri",
-            "MLFLOW_EXPERIMENT_NAME": "experiment_name",
-            "MLFLOW_ARTIFACT_LOCATION": "artifact_location",
-        }
-
-        for env_var, attr in env_mappings.items():
-            if env_var in os.environ and not getattr(self, attr):
-                setattr(self, attr, os.environ[env_var])
+        self.tracking_uri = (
+            tracking_uri
+            if tracking_uri is not None
+            else os.getenv("MLFLOW_TRACKING_URI", DEFAULT_TRACKING_URI)
+        )
+        self.experiment_name = (
+            experiment_name
+            if experiment_name is not None
+            else os.getenv("MLFLOW_EXPERIMENT_NAME", DEFAULT_EXPERIMENT_NAME)
+        )
+        self.artifact_location = (
+            artifact_location
+            if artifact_location is not None
+            else os.getenv("MLFLOW_ARTIFACT_LOCATION")
+        )
+        self.default_tags = dict(default_tags or {})
 
     def validate(self) -> bool:
         """Validate MLflow configuration."""
-        if not mlflow:
+        if mlflow is None:
             LOGGER.warning("MLflow not available")
             return False
 
@@ -68,7 +67,7 @@ class MLflowConfig:
                 mlflow.set_tracking_uri(self.tracking_uri)
                 # Test connection
                 client = mlflow.tracking.MlflowClient()
-                client.list_experiments()  # Test connectivity
+                client.search_experiments(max_results=1)
                 return True
             except Exception as e:
                 LOGGER.error("MLflow tracking URI validation failed: %s", e)
@@ -78,16 +77,16 @@ class MLflowConfig:
 
 
 def ensure_local_backend(path: Path = DEFAULT_TRACKING_DIR) -> Path:
-    """Ensure local MLflow tracking directory exists and is configured."""
+    """Configure a local SQLite tracking database inside *path*."""
 
     path.mkdir(parents=True, exist_ok=True)
 
-    if not mlflow:
+    if mlflow is None:
         LOGGER.info("MLflow not available; using filesystem path %s without tracking.", path)
         return path
 
     try:
-        tracking_uri = path.resolve().as_uri()
+        tracking_uri = f"sqlite:///{(path / 'mlflow.db').resolve()}"
         mlflow.set_tracking_uri(tracking_uri)
         LOGGER.info("MLflow tracking configured: %s", tracking_uri)
         return path
@@ -98,7 +97,7 @@ def ensure_local_backend(path: Path = DEFAULT_TRACKING_DIR) -> Path:
 
 def ensure_experiment_exists(experiment_name: str, artifact_location: str | None = None) -> str:
     """Ensure MLflow experiment exists, return experiment ID."""
-    if not mlflow:
+    if mlflow is None:
         raise ImportError("MLflow not available")
 
     try:
@@ -114,7 +113,7 @@ def ensure_experiment_exists(experiment_name: str, artifact_location: str | None
             experiment_id = experiment.experiment_id
             LOGGER.info("Using existing MLflow experiment: %s", experiment_name)
 
-        return experiment_id
+        return str(experiment_id)
 
     except Exception as e:
         LOGGER.error("Failed to ensure MLflow experiment exists: %s", e)
@@ -127,44 +126,48 @@ def start_run(
     run_name: str | None = None,
     tags: dict[str, str] | None = None,
     description: str | None = None,
-) -> Iterator[Run]:
+) -> Iterator[Run | None]:
     """Enhanced context manager with robust error handling."""
-    if not mlflow:
+    if mlflow is None:
         LOGGER.warning("MLflow not available, skipping logging")
         yield None
         return
 
+    config = MLflowConfig()
+    stack = ExitStack()
     try:
-        # Ensure experiment exists
+        if not config.validate():
+            raise RuntimeError("MLflow configuration validation failed")
         experiment_id = ensure_experiment_exists(experiment)
-
-        # Merge with default tags
-        config = MLflowConfig()
         merged_tags = {**config.default_tags, **(tags or {})}
-
-        # Start run with enhanced configuration
-        with mlflow.start_run(
-            experiment_id=experiment_id,
-            run_name=run_name,
-            tags=merged_tags,
-            description=description,
-        ) as run:
-            LOGGER.info(
-                "Started MLflow run: %s in experiment %s",
-                run.info.run_id if run else "unknown",
-                experiment,
+        run = stack.enter_context(
+            mlflow.start_run(
+                experiment_id=experiment_id,
+                run_name=run_name,
+                tags=merged_tags,
+                description=description,
             )
-            yield run
-
+        )
     except Exception as e:
+        stack.close()
         LOGGER.error("Failed to start MLflow run: %s", e)
-        # Continue without MLflow rather than failing
+        if os.getenv("MLFLOW_REQUIRED", "false").lower() == "true":
+            raise
         yield None
+        return
+
+    with stack:
+        LOGGER.info(
+            "Started MLflow run: %s in experiment %s",
+            run.info.run_id if run else "unknown",
+            experiment,
+        )
+        yield run
 
 
 def log_run_metrics(metrics: dict[str, float], step: int | None = None, prefix: str | None = None):
     """Safely log metrics with error handling."""
-    if not mlflow or not metrics:
+    if mlflow is None or not metrics:
         return
 
     try:
@@ -181,7 +184,7 @@ def log_run_metrics(metrics: dict[str, float], step: int | None = None, prefix: 
 
 def log_run_params(params: dict[str, Any], prefix: str | None = None):
     """Safely log parameters with error handling."""
-    if not mlflow or not params:
+    if mlflow is None or not params:
         return
 
     try:
@@ -198,7 +201,7 @@ def log_run_params(params: dict[str, Any], prefix: str | None = None):
 
 def log_run_artifacts(artifact_path: str, artifact_dir: str | None = None):
     """Safely log artifacts with error handling."""
-    if not mlflow or not artifact_path:
+    if mlflow is None or not artifact_path:
         return
 
     try:
@@ -221,7 +224,7 @@ def log_run_artifacts(artifact_path: str, artifact_dir: str | None = None):
 
 def get_active_run() -> Run | None:
     """Get currently active MLflow run safely."""
-    if not mlflow:
+    if mlflow is None:
         return None
 
     try:
@@ -233,7 +236,7 @@ def get_active_run() -> Run | None:
 
 def end_run(status: str = "FINISHED"):
     """End current MLflow run with status."""
-    if not mlflow:
+    if mlflow is None:
         return
 
     try:
@@ -250,14 +253,19 @@ class MLflowTimer:
 
     def __init__(self, name: str):
         self.name = name
-        self.start_time = None
+        self.start_time: float | None = None
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self.start_time = time.time()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.start_time and mlflow:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        if self.start_time is not None and mlflow is not None:
             duration = time.time() - self.start_time
             try:
                 mlflow.log_metric(f"{self.name}_duration_seconds", duration)
@@ -266,38 +274,35 @@ class MLflowTimer:
                 LOGGER.warning("Failed to log timer metric: %s", e)
 
 
-def configure_mlflow_for_development():
+def configure_mlflow_for_development() -> bool:
     """Configure MLflow for development environment."""
     dev_config = MLflowConfig(
-        tracking_uri="file:./mlruns",
+        tracking_uri=DEFAULT_TRACKING_URI,
         experiment_name="fifa_soccer_ds_dev",
-        default_tags={"environment": "development", "version": "1.0.0"},
+        default_tags={"environment": "development", "version": "0.1.0"},
     )
 
     if dev_config.validate():
         LOGGER.info("MLflow configured for development")
+        return True
     else:
         LOGGER.warning("MLflow development configuration failed")
+        return False
 
 
 def configure_mlflow_for_production(
     tracking_server: str, experiment_name: str = DEFAULT_EXPERIMENT_NAME
-):
+) -> bool:
     """Configure MLflow for production environment."""
     prod_config = MLflowConfig(
         tracking_uri=tracking_server,
         experiment_name=experiment_name,
-        default_tags={"environment": "production", "version": "1.0.0"},
+        default_tags={"environment": "production", "version": "0.1.0"},
     )
 
     if prod_config.validate():
         LOGGER.info("MLflow configured for production: %s", tracking_server)
+        return True
     else:
         LOGGER.error("MLflow production configuration failed")
-
-
-# Auto-configure based on environment
-if os.getenv("ENVIRONMENT", "development").lower() == "development":
-    configure_mlflow_for_development()
-elif "MLFLOW_TRACKING_URI" in os.environ:
-    configure_mlflow_for_production(os.environ["MLFLOW_TRACKING_URI"])
+        return False

@@ -10,21 +10,24 @@ This module provides:
 from __future__ import annotations
 
 import argparse
+import importlib
 import logging
+import math
 import signal
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 try:
-    import cv2
+    cv2: Any = importlib.import_module("cv2")
 except ImportError:  # pragma: no cover - optional dependency
     cv2 = None
 
-from src.detect.infer import InferenceConfig, extract_detections, load_model
+from src.detect.infer import InferenceConfig, extract_detections, first_prediction, load_model
 from src.track.bytetrack_runtime import ByteTrackRuntime
 from src.track.pipeline import filter_detections
 from src.utils.overlay import draw_boxes, draw_track_ids
@@ -67,6 +70,14 @@ class TrackerRuntimeConfig:
     distance_threshold: float = 80.0
     max_age: int = 15
 
+    def __post_init__(self) -> None:
+        if not 0 <= self.min_confidence <= 1:
+            raise ValueError("min_confidence must be within [0, 1]")
+        if not math.isfinite(self.distance_threshold) or self.distance_threshold <= 0:
+            raise ValueError("distance_threshold must be a positive finite value")
+        if self.max_age < 0:
+            raise ValueError("max_age must be non-negative")
+
 
 @dataclass(slots=True)
 class LiveCaptureConfig:
@@ -76,6 +87,13 @@ class LiveCaptureConfig:
     height: int | None = None
     fps: int | None = None
     fps_limit: int | None = 24
+
+    def __post_init__(self) -> None:
+        for name, value in (("width", self.width), ("height", self.height), ("fps", self.fps)):
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive when provided")
+        if self.fps_limit is not None and self.fps_limit < 0:
+            raise ValueError("fps_limit must be non-negative")
 
 
 @dataclass(slots=True)
@@ -101,9 +119,7 @@ def _normalise_source(source: str, rtsp: bool) -> str | int:
     return source
 
 
-def _initialise_writer(
-    output_path: Path, fps: float, frame_shape: tuple[int, int]
-) -> cv2.VideoWriter:
+def _initialise_writer(output_path: Path, fps: float, frame_shape: tuple[int, int]) -> Any:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     height, width = frame_shape
@@ -129,6 +145,7 @@ def run_live_pipeline(config: LivePipelineConfig) -> None:
     capture_source = _normalise_source(config.capture.source, config.capture.rtsp)
     capture = cv2.VideoCapture(capture_source)
     if not capture.isOpened():
+        capture.release()
         raise RuntimeError(f"Unable to open capture source: {config.capture.source}")
 
     if config.capture.width:
@@ -138,31 +155,32 @@ def run_live_pipeline(config: LivePipelineConfig) -> None:
     if config.capture.fps:
         capture.set(cv2.CAP_PROP_FPS, config.capture.fps)
 
-    detector = load_model(config.detector)
-    tracker = ByteTrackRuntime(
-        min_confidence=config.tracker.min_confidence,
-        distance_threshold=config.tracker.distance_threshold,
-        max_age=config.tracker.max_age,
-    )
-
-    writer: cv2.VideoWriter | None = None
-    fps_limit = config.capture.fps_limit or 0
-    desired_fps = config.capture.fps or capture.get(cv2.CAP_PROP_FPS) or 30.0
-    frame_idx = 0
+    writer: Any | None = None
 
     try:
+        detector = load_model(config.detector)
+        tracker = ByteTrackRuntime(
+            min_confidence=config.tracker.min_confidence,
+            distance_threshold=config.tracker.distance_threshold,
+            max_age=config.tracker.max_age,
+        )
+        fps_limit = config.capture.fps_limit or 0
+        desired_fps = config.capture.fps or capture.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_idx = 0
+
         while True:
             if shutdown_requested:
                 LOGGER.info("Graceful shutdown requested, stopping pipeline...")
                 break
 
-            loop_start = time.time()
+            loop_start = time.monotonic()
             ret, frame = capture.read()
             if not ret or frame is None:
                 break
 
             results = detector.predict(frame, conf=config.detector.confidence, verbose=False)
-            detections = extract_detections(results[0]) if results else []
+            prediction = first_prediction(results)
+            detections = extract_detections(prediction) if prediction is not None else []
             filtered = filter_detections(detections, min_confidence=config.tracker.min_confidence)
             tracklets = tracker.update(frame_idx, detections=filtered)
 
@@ -186,7 +204,7 @@ def run_live_pipeline(config: LivePipelineConfig) -> None:
             frame_idx += 1
 
             if fps_limit > 0:
-                elapsed = time.time() - loop_start
+                elapsed = time.monotonic() - loop_start
                 target = 1.0 / float(fps_limit)
                 if elapsed < target:
                     time.sleep(target - elapsed)

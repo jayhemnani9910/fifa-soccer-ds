@@ -56,21 +56,24 @@ class TrackingMetrics:
     mostly_lost: int = 0
     id_switches: int = 0
     fragmentations: int = 0
+    false_positives: int = 0
+    false_negatives: int = 0
+    ground_truth_detections: int = 0
+    matched_iou_sum: float = 0.0
+    matches: int = 0
 
     @property
     def mota(self) -> float:
         """Multiple Object Tracking Accuracy."""
-        if self.total_frames == 0:
+        if self.ground_truth_detections == 0:
             return 0.0
-        return 1.0 - (
-            (self.mostly_lost + self.fragmentations + self.id_switches) / self.total_frames
-        )
+        errors = self.false_positives + self.false_negatives + self.id_switches
+        return 1.0 - errors / self.ground_truth_detections
 
     @property
     def motp(self) -> float:
         """Multiple Object Tracking Precision."""
-        # Placeholder - would require ground truth trajectory data
-        return 0.0
+        return self.matched_iou_sum / self.matches if self.matches else 0.0
 
 
 @dataclass
@@ -79,9 +82,10 @@ class PipelineMetrics:
 
     detection: DetectionMetrics
     tracking: TrackingMetrics
-    total_time: float = 0.0
-    fps: float = 0.0
-    memory_usage_mb: float = 0.0
+    evaluation_time: float
+    total_time: float | None = None
+    fps: float | None = None
+    memory_usage_mb: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -99,11 +103,15 @@ class PipelineMetrics:
                 "motp": self.tracking.motp,
                 "id_switches": self.tracking.id_switches,
                 "fragmentations": self.tracking.fragmentations,
+                "false_positives": self.tracking.false_positives,
+                "false_negatives": self.tracking.false_negatives,
+                "ground_truth_detections": self.tracking.ground_truth_detections,
                 "mostly_tracked": self.tracking.mostly_tracked,
                 "partially_tracked": self.tracking.partially_tracked,
                 "mostly_lost": self.tracking.mostly_lost,
             },
             "performance": {
+                "evaluation_time_seconds": self.evaluation_time,
                 "total_time_seconds": self.total_time,
                 "fps": self.fps,
                 "memory_usage_mb": self.memory_usage_mb,
@@ -115,6 +123,8 @@ class PipelineEvaluator:
     """Evaluate complete FIFA soccer analytics pipeline."""
 
     def __init__(self, iou_threshold: float = 0.5):
+        if not 0 < iou_threshold <= 1:
+            raise ValueError("iou_threshold must be within (0, 1]")
         self.iou_threshold = iou_threshold
         self.detection_metrics = DetectionMetrics()
         self.tracking_metrics = TrackingMetrics()
@@ -137,6 +147,8 @@ class PipelineEvaluator:
 
     def calculate_iou(self, box1: list[float], box2: list[float]) -> float:
         """Calculate Intersection over Union for two bounding boxes."""
+        if len(box1) != 4 or len(box2) != 4:
+            return 0.0
         x1 = max(box1[0], box2[0])
         y1 = max(box1[1], box2[1])
         x2 = min(box1[2], box2[2])
@@ -152,54 +164,92 @@ class PipelineEvaluator:
 
         return intersection / union if union > 0 else 0.0
 
+    @staticmethod
+    def _bbox(record: dict[str, Any]) -> list[float]:
+        value = record.get("bbox", record.get("xyxy", []))
+        if not isinstance(value, (list, tuple)) or len(value) != 4:
+            return []
+        try:
+            return [float(coordinate) for coordinate in value]
+        except (TypeError, ValueError):
+            return []
+
+    @staticmethod
+    def _group_ground_truth(
+        ground_truth: list[dict[str, Any]],
+    ) -> dict[int, list[dict[str, Any]]]:
+        """Normalize flat or frame-grouped ground-truth records."""
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for item in ground_truth:
+            try:
+                frame_id = int(item.get("frame_id", 0))
+            except (TypeError, ValueError):
+                continue
+            nested = item.get("detections")
+            records = nested if isinstance(nested, list) else [item]
+            grouped.setdefault(frame_id, []).extend(
+                record for record in records if isinstance(record, dict)
+            )
+        return grouped
+
+    @staticmethod
+    def _group_results(
+        results: list[dict[str, Any]],
+    ) -> dict[int, list[dict[str, Any]]]:
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for result in results:
+            try:
+                frame_id = int(result.get("frame_id", 0))
+            except (TypeError, ValueError):
+                continue
+            detections = result.get("detections", [])
+            grouped.setdefault(frame_id, []).extend(
+                detection for detection in detections if isinstance(detection, dict)
+            )
+        return grouped
+
+    def _match_frame(
+        self,
+        predictions: list[dict[str, Any]],
+        annotations: list[dict[str, Any]],
+    ) -> tuple[list[tuple[int, int, float]], set[int], set[int]]:
+        """Greedily match a frame's boxes by descending IoU."""
+        candidates: list[tuple[float, int, int]] = []
+        for prediction_index, prediction in enumerate(predictions):
+            prediction_box = self._bbox(prediction)
+            for annotation_index, annotation in enumerate(annotations):
+                iou = self.calculate_iou(prediction_box, self._bbox(annotation))
+                if iou >= self.iou_threshold:
+                    candidates.append((iou, prediction_index, annotation_index))
+
+        matches: list[tuple[int, int, float]] = []
+        matched_predictions: set[int] = set()
+        matched_annotations: set[int] = set()
+        for iou, prediction_index, annotation_index in sorted(candidates, reverse=True):
+            if prediction_index in matched_predictions or annotation_index in matched_annotations:
+                continue
+            matched_predictions.add(prediction_index)
+            matched_annotations.add(annotation_index)
+            matches.append((prediction_index, annotation_index, iou))
+        return matches, matched_predictions, matched_annotations
+
     def evaluate_detections(
         self, results: list[dict[str, Any]], ground_truth: list[dict[str, Any]]
     ) -> DetectionMetrics:
         """Evaluate detection performance."""
         metrics = DetectionMetrics()
+        predictions_by_frame = self._group_results(results)
+        annotations_by_frame = self._group_ground_truth(ground_truth)
 
-        # Group by frame for comparison
-        gt_by_frame = {}
-        for gt in ground_truth:
-            frame_id = gt.get("frame_id", 0)
-            if frame_id not in gt_by_frame:
-                gt_by_frame[frame_id] = []
-            gt_by_frame[frame_id].append(gt)
-
-        # Compare detections to ground truth
-        for result in results:
-            frame_id = result.get("frame_id", 0)
-            detections = result.get("detections", [])
-            gt_detections = gt_by_frame.get(frame_id, [])
-
-            # Match detections to ground truth
-            matched_gt = set()
-            for det in detections:
-                det_bbox = det.get("bbox", [])
-                best_iou = 0.0
-                best_gt_idx = -1
-
-                for i, _gt in enumerate(gt_detections):
-                    if i in matched_gt:
-                        continue
-
-                    gt_bbox = gt.get("bbox", [])
-                    iou = self.calculate_iou(det_bbox, gt_bbox)
-
-                    if iou > best_iou:
-                        best_iou = iou
-                        best_gt_idx = i
-
-                if best_iou >= self.iou_threshold:
-                    metrics.true_positives += 1
-                    matched_gt.add(best_gt_idx)
-                else:
-                    metrics.false_positives += 1
-
-            # Count false negatives
-            for i, _gt in enumerate(gt_detections):
-                if i not in matched_gt:
-                    metrics.false_negatives += 1
+        for frame_id in predictions_by_frame.keys() | annotations_by_frame.keys():
+            predictions = predictions_by_frame.get(frame_id, [])
+            annotations = annotations_by_frame.get(frame_id, [])
+            matches, matched_predictions, matched_annotations = self._match_frame(
+                predictions, annotations
+            )
+            metrics.true_positives += len(matches)
+            metrics.false_positives += len(predictions) - len(matched_predictions)
+            metrics.false_negatives += len(annotations) - len(matched_annotations)
 
         return metrics
 
@@ -208,51 +258,74 @@ class PipelineEvaluator:
     ) -> TrackingMetrics:
         """Evaluate tracking performance."""
         metrics = TrackingMetrics()
+        predictions_by_frame = self._group_results(results)
+        annotations_by_frame = self._group_ground_truth(ground_truth)
+        metrics.total_frames = len(predictions_by_frame.keys() | annotations_by_frame.keys())
+        metrics.ground_truth_detections = sum(map(len, annotations_by_frame.values()))
 
-        # Group by track ID for analysis
-        tracks_by_id = {}
-        for result in results:
-            frame_id = result.get("frame_id", 0)
-            detections = result.get("detections", [])
+        # Each observation is (frame, matched predicted track ID). Ground-truth
+        # identity is required for cross-frame ID-switch and fragmentation metrics.
+        observations: dict[str, list[tuple[int, int | None]]] = {}
+        for frame_id in sorted(predictions_by_frame.keys() | annotations_by_frame.keys()):
+            predictions = predictions_by_frame.get(frame_id, [])
+            annotations = annotations_by_frame.get(frame_id, [])
+            matches, matched_predictions, matched_annotations = self._match_frame(
+                predictions, annotations
+            )
+            metrics.false_positives += len(predictions) - len(matched_predictions)
+            metrics.false_negatives += len(annotations) - len(matched_annotations)
 
-            for det in detections:
-                track_id = det.get("track_id", -1)
-                if track_id not in tracks_by_id:
-                    tracks_by_id[track_id] = []
-                tracks_by_id[track_id].append({"frame_id": frame_id, "bbox": det.get("bbox", [])})
+            match_by_annotation = {
+                annotation_index: (prediction_index, iou)
+                for prediction_index, annotation_index, iou in matches
+            }
+            for annotation_index, annotation in enumerate(annotations):
+                raw_identity = annotation.get(
+                    "track_id", annotation.get("object_id", annotation.get("id"))
+                )
+                identity = (
+                    f"identity:{raw_identity}"
+                    if raw_identity is not None
+                    else f"anonymous:{frame_id}:{annotation_index}"
+                )
+                match = match_by_annotation.get(annotation_index)
+                predicted_id: int | None = None
+                if match is not None:
+                    prediction_index, iou = match
+                    raw_predicted_id = predictions[prediction_index].get("track_id")
+                    if isinstance(raw_predicted_id, int) and not isinstance(raw_predicted_id, bool):
+                        predicted_id = raw_predicted_id
+                    metrics.matched_iou_sum += iou
+                    metrics.matches += 1
+                observations.setdefault(identity, []).append((frame_id, predicted_id))
 
-        # Analyze track continuity
-        for _track_id, track_data in tracks_by_id.items():
-            if len(track_data) < 2:
-                continue
+        for trajectory in observations.values():
+            matched = [predicted_id is not None for _, predicted_id in trajectory]
+            tracked_ratio = sum(matched) / len(matched)
+            if tracked_ratio >= 0.8:
+                metrics.mostly_tracked += 1
+            elif tracked_ratio >= 0.2:
+                metrics.partially_tracked += 1
+            else:
+                metrics.mostly_lost += 1
 
-            # Check for fragmentation
-            frame_ids = sorted([d["frame_id"] for d in track_data])
-            gaps = 0
-            for i in range(1, len(frame_ids)):
-                if frame_ids[i] - frame_ids[i - 1] > 1:
-                    gaps += 1
-
-            if gaps > 0:
-                metrics.fragmentations += gaps
-
-        # Count ID switches (simplified - would need more complex analysis)
-        frame_track_map = {}
-        id_switches = 0
-
-        for result in results:
-            frame_id = result.get("frame_id", 0)
-            detections = result.get("detections", [])
-
-            for det in detections:
-                track_id = det.get("track_id", -1)
-                if frame_id in frame_track_map:
-                    if track_id != frame_track_map[frame_id]:
-                        id_switches += 1
-                frame_track_map[frame_id] = track_id
-
-        metrics.id_switches = id_switches
-        metrics.total_frames = len(results)
+            matched_segments = 0
+            previously_matched = False
+            previous_track_id: int | None = None
+            for _, predicted_id in trajectory:
+                is_matched = predicted_id is not None
+                if is_matched and not previously_matched:
+                    matched_segments += 1
+                if (
+                    predicted_id is not None
+                    and previous_track_id is not None
+                    and predicted_id != previous_track_id
+                ):
+                    metrics.id_switches += 1
+                if predicted_id is not None:
+                    previous_track_id = predicted_id
+                previously_matched = is_matched
+            metrics.fragmentations += max(0, matched_segments - 1)
 
         return metrics
 
@@ -274,20 +347,29 @@ class PipelineEvaluator:
         detection_metrics = self.evaluate_detections(results, ground_truth)
         tracking_metrics = self.evaluate_tracking(results, ground_truth)
 
-        # Calculate performance metrics
-        total_time = (
-            timing_data.get("total_time", time.time() - start_time)
-            if timing_data
-            else time.time() - start_time
-        )
-        fps = len(results) / max(total_time, 1.0) if results else 0.0
-
-        # Memory usage (placeholder)
-        memory_usage = timing_data.get("memory_usage_mb", 0.0) if timing_data else 0.0
+        evaluation_time = time.time() - start_time
+        total_time: float | None = None
+        fps: float | None = None
+        memory_usage: float | None = None
+        if timing_data is not None:
+            if "total_time" in timing_data:
+                total_time = float(timing_data["total_time"])
+                if not total_time > 0:
+                    raise ValueError("timing_data.total_time must be positive")
+                frame_count = len(
+                    self._group_results(results).keys()
+                    | self._group_ground_truth(ground_truth).keys()
+                )
+                fps = frame_count / total_time
+            if "memory_usage_mb" in timing_data:
+                memory_usage = float(timing_data["memory_usage_mb"])
+                if memory_usage < 0:
+                    raise ValueError("timing_data.memory_usage_mb cannot be negative")
 
         pipeline_metrics = PipelineMetrics(
             detection=detection_metrics,
             tracking=tracking_metrics,
+            evaluation_time=evaluation_time,
             total_time=total_time,
             fps=fps,
             memory_usage_mb=memory_usage,
@@ -300,9 +382,10 @@ class PipelineEvaluator:
         log.info(
             f"  Tracking - MOTA: {tracking_metrics.mota:.3f}, ID Switches: {tracking_metrics.id_switches}"
         )
-        log.info(
-            f"  Performance - FPS: {fps:.1f}, Time: {total_time:.1f}s, Memory: {memory_usage:.1f}MB"
-        )
+        if total_time is not None:
+            log.info("  Source performance - FPS: %.1f, Time: %.1fs", fps, total_time)
+        else:
+            log.info("  Source performance not supplied; evaluation took %.3fs", evaluation_time)
 
         return pipeline_metrics
 
@@ -334,9 +417,22 @@ class PipelineEvaluator:
             f.write(f"  ID Switches: {metrics.tracking.id_switches}\n")
             f.write(f"  Fragmentations: {metrics.tracking.fragmentations}\n\n")
             f.write("Pipeline Performance:\n")
-            f.write(f"  FPS: {metrics.fps:.1f}\n")
-            f.write(f"  Total Time: {metrics.total_time:.1f}s\n")
-            f.write(f"  Memory Usage: {metrics.memory_usage_mb:.1f}MB\n")
+            f.write(f"  Evaluation Time: {metrics.evaluation_time:.3f}s\n")
+            f.write(
+                f"  Source FPS: {metrics.fps:.1f}\n"
+                if metrics.fps is not None
+                else "  Source FPS: not supplied\n"
+            )
+            f.write(
+                f"  Source Total Time: {metrics.total_time:.1f}s\n"
+                if metrics.total_time is not None
+                else "  Source Total Time: not supplied\n"
+            )
+            f.write(
+                f"  Source Memory Usage: {metrics.memory_usage_mb:.1f}MB\n"
+                if metrics.memory_usage_mb is not None
+                else "  Source Memory Usage: not supplied\n"
+            )
 
         log.info(f"Evaluation results saved to {output_path}")
         log.info(f"Evaluation report saved to {report_path}")

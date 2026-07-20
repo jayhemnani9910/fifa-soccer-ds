@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
+import tempfile
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -66,15 +68,8 @@ class TensorRTMemoryManager:
     def cleanup_object(self, name: str) -> None:
         """Clean up a specific TensorRT object."""
         if name in self._objects:
-            obj = self._objects.pop(name)
-            try:
-                # Call cleanup if available
-                if hasattr(obj, "__del__"):
-                    obj.__del__()
-                del obj
-                self._logger.debug(f"Cleaned up TensorRT object: {name}")
-            except Exception as e:
-                self._logger.warning(f"Error cleaning up {name}: {e}")
+            del self._objects[name]
+            self._logger.debug("Released TensorRT object reference: %s", name)
 
     def cleanup_all(self) -> None:
         """Clean up all registered TensorRT objects."""
@@ -98,24 +93,23 @@ class TensorRTExportConfig:
     int8: bool = False
     workspace_size: int = 1 << 30  # 1 GiB
 
+    def __post_init__(self) -> None:
+        if self.int8:
+            raise ValueError(
+                "INT8 export requires a calibration pipeline, which is not implemented"
+            )
+        if not 1 << 20 <= self.workspace_size <= 32 << 30:
+            raise ValueError("workspace_size must be between 1 MiB and 32 GiB")
 
-def _require_modules() -> tuple:
-    """Validate that TensorRT bindings are available before conversion.
 
-    Returns:
-        Tuple of (tensorrt, polygraphy) modules
-    """
+def _require_modules() -> Any:
+    """Validate that TensorRT bindings are available before conversion."""
     try:
         import tensorrt
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise ImportError("TensorRT Python bindings are required for engine export.") from exc
 
-    try:
-        import polygraphy.backend.trt
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ImportError("polygraphy is required for managing TensorRT builds.") from exc
-
-    return tensorrt, polygraphy
+    return tensorrt
 
 
 def build_engine(
@@ -142,7 +136,12 @@ def build_engine(
         FileNotFoundError: If ONNX file doesn't exist
         RuntimeError: If engine build fails
     """
-    import tensorrt
+    tensorrt = _require_modules()
+
+    if int8:
+        raise ValueError("INT8 export requires a calibration pipeline, which is not implemented")
+    if not 1 << 20 <= workspace_size <= 32 << 30:
+        raise ValueError("workspace_size must be between 1 MiB and 32 GiB")
 
     onnx_file = Path(onnx_path)
     if not onnx_file.exists():
@@ -184,12 +183,10 @@ def build_engine(
             config.set_memory_pool_limit(tensorrt.MemoryPoolType.WORKSPACE, workspace_size)
 
             if fp16:
+                if not builder.platform_has_fast_fp16:
+                    raise RuntimeError("The TensorRT platform does not report fast FP16 support")
                 config.set_flag(tensorrt.BuilderFlag.FP16)
                 log.info("Enabled FP16 precision")
-
-            if int8:
-                config.set_flag(tensorrt.BuilderFlag.INT8)
-                log.info("Enabled INT8 quantization (requires calibration)")
 
             # Build engine
             log.info("Building engine... this may take a minute")
@@ -205,9 +202,29 @@ def build_engine(
             if engine is None:
                 raise RuntimeError("Failed to build TensorRT engine")
 
-            # Save engine
-            with output_file.open("wb") as f:
-                f.write(engine)
+            engine_bytes = bytes(engine)
+            if not engine_bytes:
+                raise RuntimeError("TensorRT produced an empty serialized engine")
+
+            # Publish atomically so a failed export cannot leave a partial engine.
+            temporary_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="wb",
+                    dir=output_file.parent,
+                    prefix=f".{output_file.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as temporary:
+                    temporary.write(engine_bytes)
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+                    temporary_path = Path(temporary.name)
+                os.replace(temporary_path, output_file)
+            except Exception:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+                raise
 
             # Clean up engine object
             del engine
