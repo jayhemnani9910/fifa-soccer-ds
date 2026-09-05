@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools==83.0.0", "wheel==0.47.0"]
+requires = ["setuptools==84.0.0", "wheel==0.48.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -39,34 +39,34 @@ dependencies = [
 [project.optional-dependencies]
 audio = [
   "ffmpeg-python==0.2.0",
-  "librosa==0.11.0",
+  "librosa==1.0.0",
   "openai-whisper==20250625",
 ]
 data = [
-  "av==17.0.1",
-  "cryptography==48.0.1",
-  "kaggle==2.2.3",
+  "av==18.1.0",
+  "cryptography==50.0.1",
+  "kaggle==2.2.4",
 ]
 dev = [
   "anyio==4.14.2",
   "bandit==1.9.4",
-  "build==1.5.0",
-  "coverage==7.15.2",
+  "build==1.6.0",
+  "coverage==7.16.0",
   "httpx==0.28.1",
-  "mypy==1.20.2",
-  "pre-commit==4.6.0",
+  "mypy==2.3.1",
+  "pre-commit==4.6.2",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "ruff==0.15.22",
-  "types-PyYAML==6.0.12.20260518",
+  "ruff==0.16.5",
+  "types-PyYAML==6.0.12.20260815",
 ]
 export = [
   "onnx==1.22.0",
-  "onnxruntime-gpu==1.26.0",
+  "onnxruntime-gpu==1.29.0",
 ]
 mlops = [
-  "cryptography==48.0.1",
-  "mlflow==3.14.0",
+  "cryptography==50.0.1",
+  "mlflow==3.15.2",
 ]
 
 [project.scripts]
