@@ -149,6 +149,11 @@ class PipelineConfig:
     calibration_path: str = ""  # Path to homography calibration file
 
     def __post_init__(self) -> None:
+        # Tactical analytics needs both teams on the pitch; without team
+        # classification every player is skipped and the stage always raises.
+        if self.enable_tactical_analytics and not self.enable_team_classification:
+            raise ValueError("enable_tactical_analytics requires enable_team_classification")
+
         unit_interval = {
             "confidence": self.confidence,
             "min_confidence": self.min_confidence,
@@ -362,6 +367,9 @@ def process_frames_directory(
     failed_frame_indices: set[int] = set()
 
     for frame_idx, frame_path in enumerate(frame_files):
+        if shutdown_requested:
+            LOGGER.info("Shutdown requested, stopping after %d frames", frame_idx)
+            break
         LOGGER.info("Processing frame %d/%d: %s", frame_idx + 1, len(frame_files), frame_path.name)
 
         # Read frame with validation
@@ -976,6 +984,11 @@ def process_youtube_video(
             LOGGER.info("Step 3: Extracting frames...")
             frames_dir = output_dir / "frames"
             frames_dir.mkdir(exist_ok=True)
+            # A reused --output-dir would otherwise mix an earlier video's
+            # higher-numbered frames into this run.
+            for stale in frames_dir.iterdir():
+                if FRAME_FILE_PATTERN.fullmatch(stale.name):
+                    stale.unlink()
 
             # Use existing frame extraction logic
             _extract_frames_from_video(video_path, frames_dir, max_frames=cfg.max_frames)

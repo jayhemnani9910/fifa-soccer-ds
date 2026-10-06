@@ -196,11 +196,9 @@ def export_to_onnx(config: OnnxExportConfig) -> Path:
 def run(weights: str | None = None, output: str | None = None) -> Path:
     """Convenience entrypoint for CLI scripts."""
 
-    cfg = OnnxExportConfig()
-    if weights:
-        cfg.weights = weights
-    if output:
-        cfg.output = output
+    # Pass through the constructor so __post_init__ validates the overrides.
+    defaults = OnnxExportConfig()
+    cfg = OnnxExportConfig(weights=weights or defaults.weights, output=output or defaults.output)
     return export_to_onnx(cfg)
 
 

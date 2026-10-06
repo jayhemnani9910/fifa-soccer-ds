@@ -100,7 +100,7 @@ class YouTubeDownloader:
                 raise RuntimeError(f"Unsafe cached video path: {cached_path}")
             self._validate_downloaded_video(cached_path, max_duration=max_duration)
             LOGGER.info("Using cached video: %s", cached_path)
-            return self._get_video_info(cached_path, video_id, youtube_url)
+            return self._get_video_info(cached_path, video_id, youtube_url, cached=True)
 
         LOGGER.info("Downloading video: %s", youtube_url)
 
@@ -143,7 +143,7 @@ class YouTubeDownloader:
                 except Exception:
                     expected_path.unlink(missing_ok=True)
                     raise
-                result = self._get_video_info(expected_path, video_id, youtube_url)
+                result = self._get_video_info(expected_path, video_id, youtube_url, cached=False)
                 LOGGER.info("Successfully downloaded video: %s", expected_path)
                 return result
 
@@ -305,7 +305,9 @@ class YouTubeDownloader:
         """Extract video ID from YouTube URL."""
         return extract_youtube_video_id(url)
 
-    def _get_video_info(self, video_path: Path, video_id: str, url: str) -> dict[str, Any]:
+    def _get_video_info(
+        self, video_path: Path, video_id: str, url: str, *, cached: bool
+    ) -> dict[str, Any]:
         """Get information about downloaded video."""
         stat = video_path.stat()
         duration = self._probe_video_duration(video_path)
@@ -316,7 +318,7 @@ class YouTubeDownloader:
             "file_size": stat.st_size,
             "duration": duration,
             "url": url,
-            "cached": True,
+            "cached": cached,
             "download_time": None,  # Could track this
         }
 
@@ -367,34 +369,6 @@ class YouTubeDownloader:
             or port not in {None, 443}
         ):
             raise ValueError("Thumbnail URL must use an approved HTTPS YouTube image host")
-
-
-# Convenience function
-def download_youtube_video(youtube_url: str, cache_dir: Path | None = None) -> dict[str, Any]:
-    """Download a YouTube video and return its information.
-
-    Args:
-        youtube_url: YouTube video URL
-        cache_dir: Optional cache directory
-
-    Returns:
-        Dict containing download information
-    """
-    downloader = YouTubeDownloader(cache_dir)
-    return downloader.download_video(youtube_url)
-
-
-def get_youtube_info(youtube_url: str) -> dict[str, Any]:
-    """Get YouTube video information without downloading.
-
-    Args:
-        youtube_url: YouTube video URL
-
-    Returns:
-        Dict containing video metadata
-    """
-    downloader = YouTubeDownloader()
-    return downloader.get_video_info(youtube_url)
 
 
 def extract_youtube_thumbnail(youtube_url: str, output_path: Path | None = None) -> Path:

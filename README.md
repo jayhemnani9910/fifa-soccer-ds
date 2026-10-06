@@ -28,7 +28,7 @@ risks from the 2026-07-18 audit.
 | GraphSAGE/GCN training and inference | Implemented and unit-tested | No trained GNN checkpoint or labeled graph dataset is shipped |
 | ONNX export | Implemented with ONNX structural checks and ONNX Runtime load validation | A real export needs a compatible checkpoint; TensorRT needs NVIDIA tooling/hardware |
 | MLflow and DVC | MLflow is optional; the DVC stage/configuration is retained | DVC CLI installation is intentionally isolated because its current DiskCache dependency has an unfixed advisory; no remote data is configured here |
-| Weekly retraining | Library orchestration exists and fails closed without real loaders/evaluator | No scheduler or deployment-specific data-loader launcher is shipped |
+| Weekly retraining | Library orchestration exists and fails closed without real loaders/evaluator | No scheduler or deployment-specific data-loader launcher is shipped. The default fine-tune trainer does not update weights |
 | Event/player identity statistics | Not implemented | Tracker IDs are not player identities; events, passes, touches, PPDA, and possession are not inferred |
 
 ## Architecture
@@ -209,7 +209,7 @@ src/api/         batch FastAPI application and task lifecycle
 src/analytics/   team classification and calibrated tactical calculations
 src/calib/       homography and pixel-to-pitch transformations
 src/data/        data loading/versioning helpers
-src/detect/      Ultralytics inference, LoRA fine-tuning, ONNX/TensorRT export
+src/detect/      Ultralytics inference, ONNX/TensorRT export, LoRA fine-tuning scaffold (not functional against real Ultralytics)
 src/graph/       spatial-temporal graph construction and position classifier
 src/live/        capture, overlay, and live processing
 src/models/      GraphSAGE dataset/training pipeline

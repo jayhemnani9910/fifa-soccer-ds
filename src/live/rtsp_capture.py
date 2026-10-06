@@ -6,12 +6,16 @@ import contextlib
 import logging
 import queue
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import cv2
 
-from src.utils.network_security import redact_url_credentials
+from src.utils.network_security import (
+    UnsafeNetworkTarget,
+    redact_url_credentials,
+    validate_rtsp_target,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -24,8 +28,10 @@ class RTSPCapture:
         url: str,
         reconnect_interval: float = 5.0,
         max_queue_size: int = 32,
+        target_validator: Callable[[str], None] = validate_rtsp_target,
     ) -> None:
         self.url = url
+        self.target_validator = target_validator
         self.reconnect_interval = reconnect_interval
         self.max_queue_size = max_queue_size
         if reconnect_interval <= 0 or max_queue_size < 1:
@@ -50,11 +56,16 @@ class RTSPCapture:
 
     def stop(self) -> None:
         self._stop_event.set()
-        self._release_capture()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=max(2.0, self.reconnect_interval + 1.0))
-            if self._thread.is_alive():
-                LOGGER.warning("RTSP capture thread did not stop before timeout")
+        # Join before releasing: the reader thread calls capture.read() outside
+        # the lock, and releasing a VideoCapture mid-read can crash OpenCV. The
+        # reader releases it in its own finally.
+        thread = self._thread
+        if thread and thread.is_alive():
+            thread.join(timeout=max(2.0, self.reconnect_interval + 1.0))
+        if thread and thread.is_alive():
+            LOGGER.warning("RTSP capture thread did not stop before timeout")
+        else:
+            self._release_capture()
         self._thread = None
         self._drain_queue()
 
@@ -100,6 +111,14 @@ class RTSPCapture:
         with self._capture_lock:
             if self._capture is not None:
                 return True
+            # Checked again on every (re)connect, not only once up front: OpenCV
+            # resolves the hostname itself, and DNS can change between the two.
+            try:
+                self.target_validator(self.url)
+            except UnsafeNetworkTarget as exc:
+                LOGGER.error("Refusing RTSP target %s: %s", redact_url_credentials(self.url), exc)
+                self._stop_event.set()
+                return False
             try:
                 capture = cv2.VideoCapture(self.url)
                 if not capture.isOpened():

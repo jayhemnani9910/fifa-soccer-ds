@@ -85,7 +85,7 @@
       <section class="card"><h3>Batch analysis API</h3><p>FastAPI manages bounded YouTube analysis tasks, status, cancellation, metrics, and isolated output paths.</p></section>
       <section class="card"><h3>Live input</h3><p>Local files, cameras, and allowlisted RTSP sources can feed the live detector/tracker. WebRTC/HLS re-streaming is not implemented.</p></section>
       <section class="card"><h3>Calibrated analytics</h3><p>Pitch-control aggregates require an explicit, validated homography and usable two-team classification.</p></section>
-      <section class="card"><h3>Training and export</h3><p>GraphSAGE training, LoRA fine-tuning, ONNX export, and optional MLflow/DVC integration are present but require deployment-supplied artifacts.</p></section>
+      <section class="card"><h3>Training and export</h3><p>GraphSAGE training, ONNX export, and optional MLflow/DVC integration are present but require deployment-supplied artifacts. The LoRA fine-tuning loop is scaffolding: it has not run against real Ultralytics and does not yet update adapter weights.</p></section>
     </div>
 
     <h2>Data flow</h2>

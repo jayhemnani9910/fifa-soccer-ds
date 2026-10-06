@@ -25,7 +25,8 @@ import torch
 log = logging.getLogger(__name__)
 
 # Memory management for TensorRT operations
-_trt_lock = threading.Lock()
+# Reentrant: export_trt holds it and then calls build_engine, which takes it again.
+_trt_lock = threading.RLock()
 
 
 @contextmanager

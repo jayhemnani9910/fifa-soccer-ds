@@ -86,3 +86,7 @@ mlartifacts/
 # OS
 .DS_Store
 Thumbs.db
+
+# /audit outputs
+graphify-out/
+.audit/

@@ -146,6 +146,8 @@ def start_run(
                 run_name=run_name,
                 tags=merged_tags,
                 description=description,
+                # fine_tune_loop opens its run inside schedule_retrain's run.
+                nested=mlflow.active_run() is not None,
             )
         )
     except Exception as e:
