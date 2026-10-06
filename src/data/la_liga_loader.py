@@ -335,8 +335,12 @@ class KaggleDataLoader:
                     quiet=True,
                 )
                 if target.suffix == ".zip":
-                    unpacked = self._maybe_unzip(target)
-                    downloaded.extend(unpacked)
+                    extracted_dir = target.with_suffix("")
+                    if extracted_dir.exists():
+                        # Same as the full-dataset branch: an existing extract is kept.
+                        downloaded.extend(p for p in extracted_dir.rglob("*") if p.is_file())
+                    else:
+                        downloaded.extend(self._maybe_unzip(target))
                 else:
                     downloaded.append(target)
             return downloaded

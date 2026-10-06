@@ -15,7 +15,6 @@ import subprocess  # nosec B404
 import tempfile
 import time
 from collections.abc import Callable
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO, cast
@@ -372,20 +371,6 @@ class RetrainingLock:
             return time.time() - lock_time > self.stale_threshold
         except (ValueError, OSError):
             return True
-
-
-@contextmanager
-def checkpoint_lock(checkpoint_dir: Path):
-    """Context manager for atomic checkpoint operations."""
-    lock_file = checkpoint_dir / ".checkpoint.lock"
-
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    with lock_file.open("a+", encoding="utf-8") as lock_fd:
-        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
 
 
 class AtomicFileWriter:

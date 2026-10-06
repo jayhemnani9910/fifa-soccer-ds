@@ -147,8 +147,11 @@ class YouTubeMetadataParser:
             # Analyze content
             analysis = self._analyze_content(info)
 
-            # Validate video metadata comprehensively
-            validation_result = validate_video_metadata(info)
+            # Validate video metadata comprehensively. The raw yt-dlp dict keys the
+            # id as "id", so validate the structured copy, which has "video_id".
+            validation_result = validate_video_metadata(
+                validated_metadata.model_dump(mode="python")
+            )
 
             if validation_result["status"] == "invalid":
                 raise ValueError(f"Video metadata validation failed: {validation_result['issues']}")
@@ -398,7 +401,8 @@ class YouTubeMetadataParser:
 
     def _detect_language(self, title: str, description: str) -> str:
         """Detect the likely language of the content."""
-        text = f"{title} {description}".lower()
+        # Whole words, not substrings: "en" or "y" sit inside most English words.
+        text = set(f"{title} {description}".lower().split())
 
         # Simple language detection based on common words
         if any(word in text for word in ["el", "la", "de", "que", "y", "en", "un", "es"]):
@@ -512,31 +516,3 @@ class YouTubeMetadataParser:
         if validation["status"] == "invalid":
             raise ValueError(f"Metadata validation failed: {validation['issues']}")
         return metadata
-
-
-# Convenience functions
-def extract_youtube_metadata(youtube_url: str) -> dict[str, Any]:
-    """Extract metadata from YouTube video.
-
-    Args:
-        youtube_url: YouTube video URL
-
-    Returns:
-        Dict containing video metadata and analysis
-    """
-    parser = YouTubeMetadataParser()
-    return parser.extract_metadata(youtube_url)
-
-
-def predict_soccer_content(youtube_url: str) -> dict[str, Any]:
-    """Predict if YouTube content is soccer-related.
-
-    Args:
-        youtube_url: YouTube video URL
-
-    Returns:
-        Dict containing prediction results
-    """
-    parser = YouTubeMetadataParser()
-    metadata = parser.extract_metadata(youtube_url)
-    return parser.predict_soccer_content(metadata)

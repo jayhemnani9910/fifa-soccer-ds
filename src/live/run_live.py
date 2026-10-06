@@ -142,6 +142,8 @@ def _apply_overlays(frame: np.ndarray, tracklets) -> np.ndarray:
 
 
 def run_live_pipeline(config: LivePipelineConfig) -> None:
+    if cv2 is None:
+        raise ImportError("opencv-python is required for live capture")
     capture_source = _normalise_source(config.capture.source, config.capture.rtsp)
     capture = cv2.VideoCapture(capture_source)
     if not capture.isOpened():

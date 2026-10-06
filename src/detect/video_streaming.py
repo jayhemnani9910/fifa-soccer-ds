@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-import importlib
 import math
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-
-try:
-    YOLO: Any = importlib.import_module("ultralytics").YOLO
-except ImportError:  # pragma: no cover
-    YOLO = None
 
 
 def stream_video_detections(

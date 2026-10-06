@@ -213,13 +213,18 @@ class PipelineOrchestrator:
         video_info = classification.get("processing_info", {}).get("video_info", {})
         if not isinstance(video_info, Mapping):
             video_info = {}
+        # Upstream values outside VideoMetadata's limits become unknown instead of
+        # failing a run whose compute is already spent.
+        video_id = str(video_info.get("id") or extract_youtube_video_id(str(request.url)))
+        duration = video_info.get("duration")
+        duration = int(duration) if duration is not None and 0 <= duration <= 28800 else None
+        fps = video_info.get("fps")
+        fps = float(fps) if fps is not None and 0 < fps <= 120 else None
         metadata = VideoMetadata(
-            video_id=str(video_info.get("id") or extract_youtube_video_id(str(request.url))),
-            title=str(video_info.get("title") or "")[:200],
+            video_id=video_id,
+            title=str(video_info.get("title") or video_id)[:200],
             description=str(video_info.get("description") or ""),
-            duration_seconds=(
-                int(video_info["duration"]) if video_info.get("duration") is not None else None
-            ),
+            duration_seconds=duration,
             channel_title=(
                 str(video_info["uploader"])[:100] if video_info.get("uploader") else None
             ),
@@ -233,7 +238,7 @@ class PipelineOrchestrator:
             categories=list(video_info.get("categories") or []),
             publish_date=_parse_publish_date(video_info.get("upload_date")),
             resolution=(str(video_info["resolution"]) if video_info.get("resolution") else None),
-            fps=(float(video_info["fps"]) if video_info.get("fps") is not None else None),
+            fps=fps,
             audio_codec=(str(video_info["acodec"]) if video_info.get("acodec") else None),
             video_codec=(str(video_info["vcodec"]) if video_info.get("vcodec") else None),
         )

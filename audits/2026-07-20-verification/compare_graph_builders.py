@@ -3,8 +3,9 @@ Read-only against the repo; not written into the repo.
 """
 import random
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/po/projects/work/fifa-soccer-ds")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.graph.build_graph import build_track_graph, build_track_graph_optimized
 from src.track.bytetrack_runtime import Tracklet, Tracklets

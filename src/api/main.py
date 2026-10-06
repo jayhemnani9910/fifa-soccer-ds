@@ -174,7 +174,8 @@ async def api_key_middleware(request: Request, call_next):
     public_paths = {"/", "/health", "/ready", "/docs", "/redoc", "/openapi.json"}
     if API_KEY and request.url.path not in public_paths:
         supplied_key = request.headers.get("X-API-Key", "")
-        if not secrets.compare_digest(supplied_key, API_KEY):
+        # Bytes, not str: compare_digest raises TypeError on non-ASCII str.
+        if not secrets.compare_digest(supplied_key.encode(), API_KEY.encode()):
             return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
     return await call_next(request)
 
@@ -486,7 +487,10 @@ async def get_pipeline_info():
     return {
         "pipeline_version": orchestrator.config.get("pipeline", {}).get("version", __version__),
         "supported_formats": ["YouTube URLs"],
-        "max_video_duration": orchestrator.config.get("youtube", {}).get("max_duration", 7200),
+        # Same key and default the orchestrator enforces.
+        "max_video_duration": orchestrator.config.get("youtube", {})
+        .get("video", {})
+        .get("max_duration_seconds", 1800),
         "supported_languages": ["en", "es", "fr", "de", "it"],
         "confidence_threshold_default": 0.75,
         "features": [
@@ -735,8 +739,13 @@ async def process_video_analysis(task_id: str, request: YouTubeAnalysisRequest):
         logger.info(f"Analysis completed for task {task_id}")
 
     except asyncio.CancelledError:
+        started = task.status == "processing"
         task.status = "cancelled"
-        task.message = "Task cancelled before processing started"
+        task.message = (
+            "Task cancelled during processing"
+            if started
+            else "Task cancelled before processing started"
+        )
         task.updated_at = _utcnow()
         raise
     except Exception:

@@ -366,7 +366,21 @@ def validate_video_codec(codec: str, supported_codecs: list[str] | None = None) 
         True if codec is supported, False otherwise
     """
     if supported_codecs is None:
-        supported_codecs = ["h264", "h265", "hevc", "vp9", "vp8", "av1", "mpeg4", "wmv", "avi"]
+        # avc1/vp09/av01 are the RFC 6381 names yt-dlp reports for h264/vp9/av1.
+        supported_codecs = [
+            "h264",
+            "h265",
+            "hevc",
+            "vp9",
+            "vp8",
+            "av1",
+            "mpeg4",
+            "wmv",
+            "avi",
+            "avc1",
+            "vp09",
+            "av01",
+        ]
 
     codec_lower = codec.lower() if codec else ""
     return any(supported in codec_lower for supported in supported_codecs)
@@ -383,7 +397,19 @@ def validate_audio_codec(codec: str, supported_codecs: list[str] | None = None) 
         True if codec is supported, False otherwise
     """
     if supported_codecs is None:
-        supported_codecs = ["aac", "mp3", "opus", "vorbis", "flac", "pcm", "wav", "ac3", "dts"]
+        # mp4a is the RFC 6381 name yt-dlp reports for AAC.
+        supported_codecs = [
+            "aac",
+            "mp3",
+            "opus",
+            "vorbis",
+            "flac",
+            "pcm",
+            "wav",
+            "ac3",
+            "dts",
+            "mp4a",
+        ]
 
     codec_lower = codec.lower() if codec else ""
     return any(supported in codec_lower for supported in supported_codecs)
