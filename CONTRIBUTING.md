@@ -18,8 +18,8 @@ make setup-all
 On a bare Debian or Ubuntu system, OpenCV also needs `apt-get install libgl1 libglib2.0-0`. Without it,
 pytest stops at collection with `libGL.so.1: cannot open shared object file`.
 
-`make setup` installs the dev tools and the pre-commit hook. `make setup-all` adds the optional
-extras. `make lint` needs them, because mypy checks the MLflow import.
+`make setup` installs the dev tools and the pre-commit hook, which is enough for `make lint`.
+`make setup-all` adds the optional extras, such as MLflow, that CI installs.
 
 ## Tests and checks
 

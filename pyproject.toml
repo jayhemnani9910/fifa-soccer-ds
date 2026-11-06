@@ -148,10 +148,12 @@ no_implicit_optional = true
 
 [[tool.mypy.overrides]]
 # These libraries do not publish complete PEP 561 metadata for the APIs used
-# here. Keep the exception scoped to imports; first-party code remains checked.
+# here, or come from optional extras that `make setup` does not install. Keep
+# the exception scoped to imports; first-party code remains checked.
 module = [
   "cv2.*",
   "librosa.*",
+  "mlflow.*",
   "psutil.*",
   "sklearn.*",
   "scipy.*",
